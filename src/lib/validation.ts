@@ -103,6 +103,7 @@ export const commandPayloadSchemas = {
     .object({
       jobIds: jobIds.optional(),
       ruleset: z.string().trim().min(1).max(100).default("default"),
+      limit: z.number().int().min(1).max(200).default(100).optional(),
     })
     .strict(),
   run_local_llm_extraction: z

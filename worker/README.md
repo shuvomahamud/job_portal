@@ -12,9 +12,10 @@ It executes the collection/orchestration layer for the existing dashboard comman
 - Writes job records directly to Neon for efficient imports
 - Writes command events directly to Neon for audit visibility
 - Recovers stale claimed commands after a timeout
-- Supports only allow-listed Phase 2 commands:
+- Supports allow-listed Phase 2/3 commands:
   - `run_job_search`
   - `import_jobs`
+  - `run_rule_filter`
 - Uses conservative job-search link generation instead of heavy scraping/account automation
 - Deduplicates jobs by `source_url`
 
@@ -52,7 +53,7 @@ WORKER_ID="job-worker-01"
 WORKER_POLL_INTERVAL_SECONDS=10
 WORKER_CLAIM_LIMIT=1
 WORKER_MAX_CONCURRENCY=1
-WORKER_COMMAND_TYPES="run_job_search,import_jobs"
+WORKER_COMMAND_TYPES="run_job_search,import_jobs,run_rule_filter"
 JOB_SEARCH_MAX_RESULTS_PER_COMMAND=50
 JOB_SOURCE_DELAY_MS=3000
 JOB_IMPORT_FETCH_DESCRIPTIONS=false
@@ -93,6 +94,38 @@ Payload example:
 
 By default, the worker imports the URL as a job record without fetching the job page. Set `JOB_IMPORT_FETCH_DESCRIPTIONS=true` only if you want it to attempt lightweight metadata fetching. Many boards block server-side fetches, so this is optional.
 
+### `run_rule_filter`
+
+Payload example:
+
+```json
+{
+  "ruleset": "default",
+  "limit": 100
+}
+```
+
+Or run it for specific jobs:
+
+```json
+{
+  "ruleset": "default",
+  "jobIds": ["00000000-0000-4000-8000-000000000000"]
+}
+```
+
+The rule filter updates each job with:
+
+- `fit_score`
+- `status` (`ready_to_apply`, `needs_review`, or `archived`)
+- `priority`
+- `visa_signal`
+- detected tech stack
+- salary/employment/remote hints where obvious
+- a `rule_engine` row in `job_reviews`
+
+It is deterministic and lightweight: no browser, no Codex, no LLM.
+
 ## Local verification
 
 From the repo root:
@@ -126,5 +159,4 @@ The service runs as the `jobworker` system user and restarts automatically.
 
 ## Future phases
 
-Phase 3 should add rule filtering/extraction handlers.
 Phase 4 should add Codex review and n8n summary handlers.

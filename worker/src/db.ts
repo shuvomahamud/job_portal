@@ -1,9 +1,10 @@
 import { neon } from "@neondatabase/serverless";
 import { drizzle } from "drizzle-orm/neon-http";
-import { desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import * as schema from "../../src/db/schema";
 import { getConfig } from "./config";
 import type { NormalizedJobInput } from "./types";
+import type { RuleFilterResult } from "./rules/ruleEngine";
 
 let db: ReturnType<typeof drizzle<typeof schema>> | null = null;
 
@@ -91,4 +92,72 @@ export async function getJobsForPhase2(limit = 100) {
     .where(or(eq(schema.jobs.status, "new"), isNull(schema.jobs.fitScore)))
     .orderBy(desc(schema.jobs.createdAt))
     .limit(limit);
+}
+
+
+export async function getJobsForRuleFilter(options: { jobIds?: string[]; limit?: number }) {
+  const database = getWorkerDb();
+  if (options.jobIds?.length) {
+    return database
+      .select()
+      .from(schema.jobs)
+      .where(inArray(schema.jobs.id, options.jobIds))
+      .limit(options.jobIds.length);
+  }
+  return database
+    .select()
+    .from(schema.jobs)
+    .where(
+      and(
+        or(eq(schema.jobs.status, "new"), eq(schema.jobs.status, "needs_review"), isNull(schema.jobs.fitScore)),
+        or(isNull(schema.jobs.fitScore), sql`${schema.jobs.updatedAt} < NOW() - INTERVAL '5 minutes'`),
+      ),
+    )
+    .orderBy(desc(schema.jobs.createdAt))
+    .limit(options.limit ?? 100);
+}
+
+export async function updateJobAfterRuleFilter(jobId: string, evaluation: RuleFilterResult) {
+  const [job] = await getWorkerDb()
+    .update(schema.jobs)
+    .set({
+      status: evaluation.status,
+      fitScore: evaluation.score,
+      priority: evaluation.priority,
+      visaSignal: evaluation.visaSignal,
+      techStack: evaluation.techStack,
+      salaryText: evaluation.salaryText,
+      employmentType: evaluation.employmentType,
+      remoteType: evaluation.remoteType,
+      notes: evaluation.notes,
+      updatedAt: new Date(),
+    })
+    .where(eq(schema.jobs.id, jobId))
+    .returning();
+  return job;
+}
+
+export async function insertRuleReview(jobId: string, evaluation: RuleFilterResult, ruleset: string) {
+  const [review] = await getWorkerDb()
+    .insert(schema.jobReviews)
+    .values({
+      jobId,
+      reviewerType: "rule_engine",
+      score: evaluation.score,
+      recommendation: evaluation.recommendation,
+      strengths: evaluation.strengths,
+      gaps: evaluation.gaps,
+      visaNotes: evaluation.visaNotes,
+      resumeAngle: evaluation.resumeAngle,
+      rawOutput: {
+        ruleset,
+        matchedPositiveRules: evaluation.matchedPositiveRules,
+        matchedNegativeRules: evaluation.matchedNegativeRules,
+        visaSignal: evaluation.visaSignal,
+        status: evaluation.status,
+        priority: evaluation.priority,
+      },
+    })
+    .returning();
+  return review;
 }

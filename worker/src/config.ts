@@ -15,7 +15,7 @@ const envSchema = z.object({
   WORKER_POLL_INTERVAL_SECONDS: intFromEnv(10, 5, 3600),
   WORKER_CLAIM_LIMIT: intFromEnv(1, 1, 5),
   WORKER_MAX_CONCURRENCY: intFromEnv(1, 1, 3),
-  WORKER_COMMAND_TYPES: z.string().default("run_job_search,import_jobs"),
+  WORKER_COMMAND_TYPES: z.string().default("run_job_search,import_jobs,run_rule_filter"),
   WORKER_IDLE_BACKOFF_MAX_SECONDS: intFromEnv(60, 10, 600),
   JOB_SEARCH_MAX_RESULTS_PER_COMMAND: intFromEnv(50, 1, 200),
   JOB_SOURCE_DELAY_MS: intFromEnv(3000, 0, 60000),
