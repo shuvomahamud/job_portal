@@ -18,7 +18,7 @@ import {
   PRIORITIES,
 } from "@/lib/constants";
 import { followupUpdateSchema, jobUpdateSchema } from "@/lib/validation";
-import { createCommand, getCommandDetail } from "@/services/commands";
+import { cancelCommand, createCommand, getCommandDetail } from "@/services/commands";
 import { updateJob } from "@/services/jobs";
 
 const requiredString = (formData: FormData, key: string) =>
@@ -209,6 +209,13 @@ export async function retryCommand(commandId: string) {
     message: "A new command was created from this failed command.",
     metadataJson: { newCommandId: retried.id, requestedBy: user.id },
   });
+  revalidatePath("/commands");
+}
+
+export async function cancelQueuedCommand(commandId: string) {
+  const user = await requireDashboardUser();
+  const id = z.uuid().parse(commandId);
+  await cancelCommand(id, user.id);
   revalidatePath("/commands");
 }
 

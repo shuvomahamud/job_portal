@@ -1,9 +1,9 @@
-import { AlertTriangle, RotateCcw } from "lucide-react";
+import { AlertTriangle, Ban, RotateCcw } from "lucide-react";
 import { CommandComposer } from "@/components/command-composer";
 import { EmptyState, PageHeader, StatusBadge } from "@/components/ui";
 import { compactJson, formatDateTime, humanize } from "@/lib/format";
 import { listCommands } from "@/services/commands";
-import { retryCommand } from "../actions";
+import { cancelQueuedCommand, retryCommand } from "../actions";
 
 export default async function CommandsPage() {
   const commandRows = await listCommands({ limit: 100 });
@@ -88,6 +88,16 @@ export default async function CommandsPage() {
                         >
                           <button className="secondary-button">
                             <RotateCcw className="size-4" /> Retry as new command
+                          </button>
+                        </form>
+                      )}
+                      {(command.status === "pending" || command.status === "claimed") && (
+                        <form
+                          action={cancelQueuedCommand.bind(null, command.id)}
+                          className="mt-4"
+                        >
+                          <button className="secondary-button">
+                            <Ban className="size-4" /> Stop command
                           </button>
                         </form>
                       )}

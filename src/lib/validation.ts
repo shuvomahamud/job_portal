@@ -98,7 +98,16 @@ export const commandPayloadSchemas = {
       queries: z.array(z.string().trim().min(1).max(200)).min(1).max(10),
       locations: z.array(z.string().trim().min(1).max(200)).min(1).max(10).optional(),
       maxResults: z.number().int().min(1).max(100).optional(),
+      sourceLimits: z
+        .object({
+          linkedin: z.number().int().min(0).max(100).optional(),
+          indeed: z.number().int().min(0).max(100).optional(),
+          dice: z.number().int().min(0).max(100).optional(),
+        })
+        .strict()
+        .optional(),
       maxPagesPerSearch: z.number().int().min(1).max(5).optional(),
+      maxRuntimeMinutes: z.number().int().min(1).max(30).optional(),
       minDelayMs: z.number().int().min(5000).max(120000).optional(),
       maxDelayMs: z.number().int().min(5000).max(180000).optional(),
       dryRun: z.boolean().optional(),

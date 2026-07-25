@@ -4,9 +4,9 @@ import { handleDiscoverJobsBrowser } from "./handlers/discoverJobsBrowser";
 import { handleImportJobs } from "./handlers/importJobs";
 import { handleRunRuleFilter } from "./handlers/runRuleFilter";
 import { handleRunJobSearch } from "./handlers/runJobSearch";
-import type { DashboardCommand, HandlerResult } from "./types";
+import type { CommandHandler, DashboardCommand, HandlerResult } from "./types";
 
-const phase2Handlers: Record<string, (payload: unknown) => Promise<HandlerResult>> = {
+const phase2Handlers: Record<string, CommandHandler> = {
   discover_jobs_browser: handleDiscoverJobsBrowser,
   import_jobs: handleImportJobs,
   run_rule_filter: handleRunRuleFilter,
@@ -26,7 +26,7 @@ export async function dispatchCommand(command: DashboardCommand): Promise<Handle
     workerSupportedTypes: supportedPhase2CommandTypes(),
   });
   try {
-    return await handler(command.payloadJson ?? {});
+    return await handler(command.payloadJson ?? {}, { command });
   } catch (error) {
     if (error instanceof z.ZodError) {
       throw new Error(`Invalid ${command.type} payload: ${error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("; ")}`);

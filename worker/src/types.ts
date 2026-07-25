@@ -52,4 +52,9 @@ export type NormalizedJobInput = {
   notes?: string | null;
 };
 
+export type HandlerContext = {
+  command: DashboardCommand;
+};
+
 export type HandlerResult = Record<string, unknown>;
+export type CommandHandler = (payload: unknown, context: HandlerContext) => Promise<HandlerResult>;

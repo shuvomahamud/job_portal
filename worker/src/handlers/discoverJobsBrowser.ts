@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { getConfig, sleep } from "../config";
-import { upsertJobs } from "../db";
+import { addCommandEvent, getCommandStatus, upsertJobs } from "../db";
 import {
   buildBrowserSearchUrl,
   buildDiscoveredJobRecords,
@@ -8,14 +8,24 @@ import {
   humanDelayMs,
   type BrowserDiscoverySource,
 } from "../search/browserDiscovery";
-import type { HandlerResult } from "../types";
+import type { HandlerContext, HandlerResult } from "../types";
+
+const sourceLimitsSchema = z
+  .object({
+    linkedin: z.number().int().min(0).max(100).optional(),
+    indeed: z.number().int().min(0).max(100).optional(),
+    dice: z.number().int().min(0).max(100).optional(),
+  })
+  .strict();
 
 const payloadSchema = z.object({
   sources: z.array(z.enum(["linkedin", "indeed", "dice"])).min(1).max(3).default(["linkedin", "indeed", "dice"]).optional(),
   queries: z.array(z.string().trim().min(1).max(200)).min(1).max(10),
   locations: z.array(z.string().trim().min(1).max(200)).min(1).max(10).default(["Remote"]).optional(),
   maxResults: z.number().int().min(1).max(100).optional(),
+  sourceLimits: sourceLimitsSchema.optional(),
   maxPagesPerSearch: z.number().int().min(1).max(5).optional(),
+  maxRuntimeMinutes: z.number().int().min(1).max(30).default(30).optional(),
   minDelayMs: z.number().int().min(5000).max(120000).optional(),
   maxDelayMs: z.number().int().min(5000).max(180000).optional(),
   dryRun: z.boolean().default(false).optional(),
@@ -38,7 +48,9 @@ type PageLike = {
   waitForTimeout: (ms: number) => Promise<void>;
 };
 
-export async function handleDiscoverJobsBrowser(payload: unknown): Promise<HandlerResult> {
+type StopReason = "completed" | "canceled" | "time_limit" | "quota_reached";
+
+export async function handleDiscoverJobsBrowser(payload: unknown, context: HandlerContext): Promise<HandlerResult> {
   const cfg = getConfig();
   if (!cfg.JOB_BROWSER_DISCOVERY_ENABLED) {
     throw new Error("Browser discovery is disabled. Set JOB_BROWSER_DISCOVERY_ENABLED=true only on the local machine where you are logged in to job boards.");
@@ -49,63 +61,152 @@ export async function handleDiscoverJobsBrowser(payload: unknown): Promise<Handl
   const locations = input.locations ?? ["Remote"];
   const maxResults = Math.min(input.maxResults ?? cfg.JOB_BROWSER_MAX_RESULTS_PER_COMMAND, cfg.JOB_BROWSER_MAX_RESULTS_PER_COMMAND);
   const maxPagesPerSearch = Math.min(input.maxPagesPerSearch ?? cfg.JOB_BROWSER_MAX_PAGES_PER_SEARCH, cfg.JOB_BROWSER_MAX_PAGES_PER_SEARCH);
+  const maxRuntimeMinutes = Math.min(input.maxRuntimeMinutes ?? 30, 30);
+  const deadlineAt = Date.now() + maxRuntimeMinutes * 60 * 1000;
   const minDelayMs = input.minDelayMs ?? cfg.JOB_BROWSER_MIN_DELAY_MS;
   const maxDelayMs = Math.max(input.maxDelayMs ?? cfg.JOB_BROWSER_MAX_DELAY_MS, minDelayMs);
+  const sourceLimits = normalizeSourceLimits(sources, input.sourceLimits, maxResults);
+  const foundBySource = Object.fromEntries(sources.map((source) => [source, 0])) as Record<BrowserDiscoverySource, number>;
 
   const playwright = await loadPlaywright();
-  const context = await playwright.chromium.launchPersistentContext(cfg.JOB_BROWSER_USER_DATA_DIR, {
+  const contextBrowser = await playwright.chromium.launchPersistentContext(cfg.JOB_BROWSER_USER_DATA_DIR, {
     headless: cfg.JOB_BROWSER_HEADLESS,
     slowMo: cfg.JOB_BROWSER_SLOW_MO_MS,
     viewport: { width: 1365, height: 900 },
     locale: "en-US",
   });
 
-  const discovered = new Map<string, { source: BrowserDiscoverySource; query: string; location?: string }>();
+  const discovered = new Set<string>();
+  const upsertedIds: string[] = [];
   const visitedSearches: string[] = [];
+  let stopReason: StopReason = "completed";
 
-  try {
-    const page = await context.newPage();
-    for (const source of sources) {
-      for (const query of input.queries) {
-        for (const location of locations) {
-          if (discovered.size >= maxResults) break;
-          const searchUrl = buildBrowserSearchUrl({ source, query, location });
-          visitedSearches.push(searchUrl);
-          await sleep(humanDelayMs({ minDelayMs, maxDelayMs }));
-          await page.goto(searchUrl, { waitUntil: "domcontentloaded", timeout: cfg.JOB_BROWSER_NAVIGATION_TIMEOUT_MS });
-          await page.waitForTimeout(humanDelayMs({ minDelayMs, maxDelayMs }));
-          const html = await page.content();
-          const urls = extractJobUrlsFromHtml(source, html, searchUrl, maxResults - discovered.size);
-          for (const url of urls) discovered.set(url, { source, query, location });
-
-          // Phase 2B intentionally stays conservative: we collect page-one result links first.
-          // maxPagesPerSearch is kept in the command shape so we can add source-specific next-page navigation later without changing the API.
-          if (maxPagesPerSearch > 1) await page.waitForTimeout(humanDelayMs({ minDelayMs, maxDelayMs }));
-        }
-      }
-    }
-  } finally {
-    await context.close();
-  }
-
-  const jobs = Array.from(discovered.entries()).flatMap(([url, spec]) => buildDiscoveredJobRecords(spec.source, [url], spec));
-  const upserted = input.dryRun ? [] : await upsertJobs(jobs);
-
-  return {
-    mode: "browser_assisted_human_speed_discovery",
-    message: "Discovered individual job links using a local logged-in browser profile at human-like speed. No apply/submit actions were performed.",
-    dryRun: input.dryRun ?? false,
-    visitedSearchCount: visitedSearches.length,
-    discoveredCount: jobs.length,
-    upserted: upserted.length,
+  await addCommandEvent(context.command.id, "browser_discovery_started", "Browser discovery started with a 30-minute maximum runtime cap.", {
     sources,
     queries: input.queries,
     locations,
     maxResults,
-    maxPagesPerSearch,
+    sourceLimits,
+    maxRuntimeMinutes,
     delayRangeMs: [minDelayMs, maxDelayMs],
-    jobIds: upserted.map((job) => job.id),
+  });
+
+  try {
+    const page = await contextBrowser.newPage();
+    outer: for (const source of sources) {
+      for (const query of input.queries) {
+        for (const location of locations) {
+          const checkpoint = await shouldStop(context.command.id, deadlineAt, discovered.size, maxResults, source, foundBySource, sourceLimits);
+          if (checkpoint) {
+            stopReason = checkpoint;
+            break outer;
+          }
+
+          const searchUrl = buildBrowserSearchUrl({ source, query, location });
+          visitedSearches.push(searchUrl);
+          await addCommandEvent(context.command.id, "browser_discovery_progress", `Searching ${source} for ${query} in ${location}.`, {
+            source,
+            query,
+            location,
+            foundSoFar: discovered.size,
+            foundBySource,
+          });
+
+          await sleep(humanDelayMs({ minDelayMs, maxDelayMs }));
+          await page.goto(searchUrl, { waitUntil: "domcontentloaded", timeout: cfg.JOB_BROWSER_NAVIGATION_TIMEOUT_MS });
+          await page.waitForTimeout(humanDelayMs({ minDelayMs, maxDelayMs }));
+          const html = await page.content();
+
+          const remainingGlobal = maxResults - discovered.size;
+          const remainingSource = sourceLimits[source] - foundBySource[source];
+          const urls = extractJobUrlsFromHtml(source, html, searchUrl, Math.max(0, Math.min(remainingGlobal, remainingSource)))
+            .filter((url) => !discovered.has(url));
+
+          for (const url of urls) discovered.add(url);
+          foundBySource[source] += urls.length;
+
+          const jobs = buildDiscoveredJobRecords(source, urls, { query, location });
+          const upserted = input.dryRun ? [] : await upsertJobs(jobs);
+          upsertedIds.push(...upserted.map((job) => job.id));
+
+          await addCommandEvent(context.command.id, "browser_discovery_checkpoint", `Checkpoint saved ${upserted.length} ${source} job link(s).`, {
+            source,
+            query,
+            location,
+            discoveredThisSearch: urls.length,
+            savedThisSearch: upserted.length,
+            totalDiscovered: discovered.size,
+            totalSaved: upsertedIds.length,
+            foundBySource,
+          });
+
+          if (maxPagesPerSearch > 1) await page.waitForTimeout(humanDelayMs({ minDelayMs, maxDelayMs }));
+        }
+      }
+    }
+  } catch (error) {
+    await addCommandEvent(context.command.id, "browser_discovery_failed_gracefully", "Browser discovery stopped after an error; already checkpointed jobs were preserved.", {
+      error: error instanceof Error ? error.message : String(error),
+      savedBeforeFailure: upsertedIds.length,
+      foundBySource,
+    });
+    throw error;
+  } finally {
+    await contextBrowser.close();
+  }
+
+  await addCommandEvent(context.command.id, "browser_discovery_finished", `Browser discovery finished with reason: ${stopReason}.`, {
+    stopReason,
+    discoveredCount: discovered.size,
+    savedCount: upsertedIds.length,
+    foundBySource,
+  });
+
+  return {
+    mode: "browser_assisted_human_speed_discovery",
+    message: "Discovered individual job links using a local logged-in browser profile at human-like speed. No apply/submit actions were performed.",
+    stopReason,
+    dryRun: input.dryRun ?? false,
+    visitedSearchCount: visitedSearches.length,
+    discoveredCount: discovered.size,
+    upserted: upsertedIds.length,
+    sources,
+    queries: input.queries,
+    locations,
+    maxResults,
+    sourceLimits,
+    foundBySource,
+    maxPagesPerSearch,
+    maxRuntimeMinutes,
+    delayRangeMs: [minDelayMs, maxDelayMs],
+    jobIds: upsertedIds,
   };
+}
+
+function normalizeSourceLimits(
+  sources: BrowserDiscoverySource[],
+  sourceLimits: Partial<Record<BrowserDiscoverySource, number>> | undefined,
+  maxResults: number,
+) {
+  const fallback = Math.ceil(maxResults / sources.length);
+  return Object.fromEntries(sources.map((source) => [source, Math.min(sourceLimits?.[source] ?? fallback, maxResults)])) as Record<BrowserDiscoverySource, number>;
+}
+
+async function shouldStop(
+  commandId: string,
+  deadlineAt: number,
+  discoveredCount: number,
+  maxResults: number,
+  source: BrowserDiscoverySource,
+  foundBySource: Record<BrowserDiscoverySource, number>,
+  sourceLimits: Record<BrowserDiscoverySource, number>,
+): Promise<StopReason | null> {
+  if (Date.now() >= deadlineAt) return "time_limit";
+  const status = await getCommandStatus(commandId);
+  if (status === "canceled") return "canceled";
+  if (discoveredCount >= maxResults) return "quota_reached";
+  if (foundBySource[source] >= sourceLimits[source]) return "quota_reached";
+  return null;
 }
 
 async function loadPlaywright(): Promise<PlaywrightModule> {

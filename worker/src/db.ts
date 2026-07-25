@@ -73,6 +73,15 @@ export async function addCommandEvent(commandId: string, eventType: string, mess
   await getWorkerDb().insert(schema.commandEvents).values({ commandId, eventType, message, metadataJson });
 }
 
+export async function getCommandStatus(commandId: string) {
+  const [row] = await getWorkerDb()
+    .select({ status: schema.commands.status })
+    .from(schema.commands)
+    .where(eq(schema.commands.id, commandId))
+    .limit(1);
+  return row?.status ?? null;
+}
+
 export async function recoverStaleClaims(maxClaimAgeMinutes = 60) {
   const database = getWorkerDb();
   const result = await database.execute(sql`

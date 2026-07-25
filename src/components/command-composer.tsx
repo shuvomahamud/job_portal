@@ -17,8 +17,10 @@ const payloadExamples: Record<(typeof COMMAND_TYPES)[number], object> = {
     sources: ["linkedin", "indeed", "dice"],
     queries: [".NET C# SQL"],
     locations: ["Remote"],
-    maxResults: 25,
+    maxResults: 30,
+    sourceLimits: { linkedin: 10, indeed: 10, dice: 10 },
     maxPagesPerSearch: 1,
+    maxRuntimeMinutes: 30,
   },
   import_jobs: {
     source: "linkedin",

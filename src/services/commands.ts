@@ -212,3 +212,32 @@ export async function failCommand(
   });
   return command;
 }
+
+export async function cancelCommand(commandId: string, requestedBy: string) {
+  const db = getDb();
+  const [command] = await db
+    .update(commands)
+    .set({
+      status: "canceled",
+      errorMessage: "Canceled by user from dashboard.",
+      completedAt: new Date(),
+      updatedAt: new Date(),
+    })
+    .where(
+      and(
+        eq(commands.id, commandId),
+        sql`${commands.status} IN ('pending', 'claimed')`,
+      ),
+    )
+    .returning();
+
+  if (!command) return null;
+
+  await db.insert(commandEvents).values({
+    commandId,
+    eventType: "canceled",
+    message: "Command cancellation requested from dashboard.",
+    metadataJson: { requestedBy },
+  });
+  return command;
+}
