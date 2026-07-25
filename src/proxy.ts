@@ -1,4 +1,5 @@
 import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
+import { NextResponse } from "next/server";
 
 const isDashboardRoute = createRouteMatcher([
   "/",
@@ -12,7 +13,13 @@ const isDashboardRoute = createRouteMatcher([
 
 export default clerkMiddleware(async (auth, request) => {
   if (isDashboardRoute(request)) {
-    await auth.protect();
+    const session = await auth();
+
+    if (!session.userId) {
+      const signInUrl = new URL("/sign-in", request.url);
+      signInUrl.searchParams.set("redirect_url", request.url);
+      return NextResponse.redirect(signInUrl);
+    }
   }
 });
 
