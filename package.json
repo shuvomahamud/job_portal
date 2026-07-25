@@ -21,7 +21,12 @@
     "db:seed": "tsx scripts/seed.ts",
     "db:verify": "tsx scripts/verify-db.ts",
     "seed:check": "tsx scripts/seed.ts --dry-run",
-    "test:smoke": "tsx scripts/smoke-test.ts"
+    "test:smoke": "tsx scripts/smoke-test.ts",
+    "worker:dev": "tsx worker/src/runner.ts",
+    "worker:start": "tsx worker/src/runner.ts",
+    "worker:health": "tsx worker/src/health.ts",
+    "worker:typecheck": "tsc -p worker/tsconfig.json --noEmit",
+    "worker:test": "tsx --test worker/tests/searchUrls.test.ts"
   },
   "dependencies": {
     "@clerk/nextjs": "^7.6.1",

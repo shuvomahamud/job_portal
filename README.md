@@ -358,14 +358,36 @@ The system intentionally records resume URLs/paths, not resume file bytes.
 Object storage and signed download URLs can be added when actual uploads are in
 scope.
 
+## Worker implementation
+
+Phase 2 worker code now lives in `worker/`.
+
+It is a lightweight VPS/cloud service that:
+
+- polls every 10 seconds by default;
+- claims commands through `/api/worker/claim-command`;
+- completes/fails commands through the dashboard worker APIs;
+- writes job records and command audit events directly to Neon;
+- supports `run_job_search` and `import_jobs`;
+- avoids job-board passwords, cookies, browser automation, CAPTCHA bypass, and Codex usage in Phase 2.
+
+Useful checks:
+
+```bash
+npm run worker:typecheck
+npm run worker:test
+```
+
+With real VPS env vars:
+
+```bash
+WORKER_ENV_FILE=/opt/job-worker/.env npm run worker:health
+WORKER_ENV_FILE=/opt/job-worker/.env npm run worker:start
+```
+
+See `worker/README.md` for env vars, systemd deployment, and command payload examples.
+
 ## Future phases
-
-### Phase 2 — collection and orchestration
-
-- Add job-source import workers without placing site credentials in Vercel.
-- Add n8n workflows that turn provider events into `integration_events`.
-- Dispatch existing commands through a fixed worker type-to-handler map.
-- Add retry policy, leases/timeouts, idempotency keys, and worker health.
 
 ### Phase 3 — extraction and review
 

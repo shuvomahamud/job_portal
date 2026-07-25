@@ -1,0 +1,21 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "noEmit": true,
+    "allowJs": false,
+    "isolatedModules": false,
+    "types": ["node"],
+    "incremental": false,
+    "baseUrl": "..",
+    "paths": {
+      "@/*": ["./src/*"],
+      "@worker/*": ["./worker/src/*"]
+    }
+  },
+  "include": ["src/**/*.ts", "tests/**/*.ts"],
+  "exclude": ["node_modules"]
+}

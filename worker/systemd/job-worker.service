@@ -1,0 +1,23 @@
+[Unit]
+Description=Searchlight Phase 2 Job Worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/job-worker/job_portal
+Environment=NODE_ENV=production
+Environment=WORKER_ENV_FILE=/opt/job-worker/.env
+ExecStart=/usr/bin/npm run worker:start
+Restart=always
+RestartSec=10
+User=jobworker
+Group=jobworker
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/opt/job-worker
+
+[Install]
+WantedBy=multi-user.target
