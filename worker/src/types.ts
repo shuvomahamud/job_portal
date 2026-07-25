@@ -1,5 +1,6 @@
 export type CommandType =
   | "run_job_search"
+  | "discover_jobs_browser"
   | "import_jobs"
   | "run_rule_filter"
   | "run_local_llm_extraction"

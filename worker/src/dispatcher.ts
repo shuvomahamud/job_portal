@@ -1,11 +1,13 @@
 import { z } from "zod";
 import { addCommandEvent } from "./db";
+import { handleDiscoverJobsBrowser } from "./handlers/discoverJobsBrowser";
 import { handleImportJobs } from "./handlers/importJobs";
 import { handleRunRuleFilter } from "./handlers/runRuleFilter";
 import { handleRunJobSearch } from "./handlers/runJobSearch";
 import type { DashboardCommand, HandlerResult } from "./types";
 
 const phase2Handlers: Record<string, (payload: unknown) => Promise<HandlerResult>> = {
+  discover_jobs_browser: handleDiscoverJobsBrowser,
   import_jobs: handleImportJobs,
   run_rule_filter: handleRunRuleFilter,
   run_job_search: handleRunJobSearch,

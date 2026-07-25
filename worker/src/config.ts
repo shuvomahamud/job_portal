@@ -7,6 +7,8 @@ loadEnv({ path: process.env.WORKER_ENV_FILE || ".env", quiet: true });
 const intFromEnv = (defaultValue: number, min: number, max: number) =>
   z.coerce.number().int().min(min).max(max).default(defaultValue);
 
+const boolFromEnv = (defaultValue: boolean) => z.coerce.boolean().default(defaultValue);
+
 const envSchema = z.object({
   DATABASE_URL: z.string().min(1),
   DASHBOARD_BASE_URL: z.string().url(),
@@ -21,6 +23,15 @@ const envSchema = z.object({
   JOB_SOURCE_DELAY_MS: intFromEnv(3000, 0, 60000),
   JOB_IMPORT_FETCH_TIMEOUT_MS: intFromEnv(12000, 1000, 60000),
   JOB_IMPORT_FETCH_DESCRIPTIONS: z.coerce.boolean().default(false),
+  JOB_BROWSER_DISCOVERY_ENABLED: boolFromEnv(false),
+  JOB_BROWSER_USER_DATA_DIR: z.string().min(1).default("/home/shuvo/.job-worker-browser-profile"),
+  JOB_BROWSER_HEADLESS: boolFromEnv(false),
+  JOB_BROWSER_MIN_DELAY_MS: intFromEnv(15000, 5000, 120000),
+  JOB_BROWSER_MAX_DELAY_MS: intFromEnv(45000, 5000, 180000),
+  JOB_BROWSER_SLOW_MO_MS: intFromEnv(500, 0, 5000),
+  JOB_BROWSER_NAVIGATION_TIMEOUT_MS: intFromEnv(60000, 10000, 180000),
+  JOB_BROWSER_MAX_RESULTS_PER_COMMAND: intFromEnv(25, 1, 100),
+  JOB_BROWSER_MAX_PAGES_PER_SEARCH: intFromEnv(1, 1, 5),
   CODEX_ENABLED: z.coerce.boolean().default(false),
 });
 

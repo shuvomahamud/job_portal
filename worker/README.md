@@ -6,7 +6,7 @@ It executes the collection/orchestration layer for the existing dashboard comman
 
 ## What Phase 2 includes
 
-- 10-second default poll loop
+- 30-second always-running poll loop recommended; 10-second override for testing
 - Claims commands from the dashboard worker API
 - Completes/fails commands through the dashboard worker API
 - Writes job records directly to Neon for efficient imports
@@ -14,16 +14,17 @@ It executes the collection/orchestration layer for the existing dashboard comman
 - Recovers stale claimed commands after a timeout
 - Supports allow-listed Phase 2/3 commands:
   - `run_job_search`
+  - `discover_jobs_browser`
   - `import_jobs`
   - `run_rule_filter`
-- Uses conservative job-search link generation instead of heavy scraping/account automation
+- Uses conservative job-search link generation plus optional local browser-assisted discovery
 - Deduplicates jobs by `source_url`
 
 ## What Phase 2 intentionally does not do
 
 - No Codex review
 - No local LLM
-- No always-on browser
+- No always-on browser unless `discover_jobs_browser` is explicitly enabled on the local logged-in machine
 - No LinkedIn/Indeed/Dice password handling
 - No cookie/session storage
 - No CAPTCHA/security bypass
@@ -32,14 +33,14 @@ It executes the collection/orchestration layer for the existing dashboard comman
 ## Lightweight defaults
 
 ```env
-WORKER_POLL_INTERVAL_SECONDS=10
+WORKER_POLL_INTERVAL_SECONDS=30
 WORKER_CLAIM_LIMIT=1
 WORKER_MAX_CONCURRENCY=1
 JOB_SEARCH_MAX_RESULTS_PER_COMMAND=50
 JOB_SOURCE_DELAY_MS=3000
 ```
 
-A 10-second poll means only about 6 checks/minute. When the queue is empty, the process sleeps and does no CPU-heavy work.
+A 30-second poll means only about 2 checks/minute. When the queue is empty, the process sleeps and does no CPU-heavy work. For active testing only, override `WORKER_POLL_INTERVAL_SECONDS=10` in the command environment.
 
 ## Required env vars
 
@@ -50,10 +51,10 @@ DATABASE_URL="postgresql://..."
 DASHBOARD_BASE_URL="https://your-dashboard.vercel.app"
 WORKER_API_SECRET="..."
 WORKER_ID="job-worker-01"
-WORKER_POLL_INTERVAL_SECONDS=10
+WORKER_POLL_INTERVAL_SECONDS=30
 WORKER_CLAIM_LIMIT=1
 WORKER_MAX_CONCURRENCY=1
-WORKER_COMMAND_TYPES="run_job_search,import_jobs,run_rule_filter"
+WORKER_COMMAND_TYPES="run_job_search,discover_jobs_browser,import_jobs,run_rule_filter"
 JOB_SEARCH_MAX_RESULTS_PER_COMMAND=50
 JOB_SOURCE_DELAY_MS=3000
 JOB_IMPORT_FETCH_DESCRIPTIONS=false
@@ -78,6 +79,51 @@ Payload example:
 ```
 
 The worker creates lightweight searchable records with source URLs, such as LinkedIn/Indeed/Dice search-result pages. This gives you useful links in the dashboard without running a heavy scraper or touching job-board credentials.
+
+### `discover_jobs_browser`
+
+This is Phase 2B. It uses a **local logged-in browser profile** at human-like speed to search LinkedIn, Indeed, and Dice and collect individual job URLs.
+
+It is disabled by default. Enable only on the machine where you are logged in through the browser:
+
+```env
+JOB_BROWSER_DISCOVERY_ENABLED=true
+JOB_BROWSER_USER_DATA_DIR="/home/shuvo/.job-worker-browser-profile"
+JOB_BROWSER_HEADLESS=false
+JOB_BROWSER_MIN_DELAY_MS=15000
+JOB_BROWSER_MAX_DELAY_MS=45000
+JOB_BROWSER_SLOW_MO_MS=500
+JOB_BROWSER_MAX_RESULTS_PER_COMMAND=25
+JOB_BROWSER_MAX_PAGES_PER_SEARCH=1
+```
+
+Install browser support on that local worker machine:
+
+```bash
+npm install -D playwright
+npx playwright install chromium
+```
+
+Payload example:
+
+```json
+{
+  "sources": ["linkedin", "indeed", "dice"],
+  "queries": [".NET C# SQL", "application support Oracle"],
+  "locations": ["Remote", "New York"],
+  "maxResults": 25,
+  "maxPagesPerSearch": 1
+}
+```
+
+Safety boundaries:
+
+- browser must already be logged in by the human;
+- worker never stores platform passwords;
+- worker does not click Apply or Submit;
+- worker does not bypass CAPTCHA/security checks;
+- worker waits 15–45 seconds between page actions by default;
+- worker keeps page/result limits small.
 
 ### `import_jobs`
 

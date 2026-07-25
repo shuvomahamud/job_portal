@@ -13,6 +13,13 @@ const payloadExamples: Record<(typeof COMMAND_TYPES)[number], object> = {
     locations: ["New York", "Remote"],
     limit: 40,
   },
+  discover_jobs_browser: {
+    sources: ["linkedin", "indeed", "dice"],
+    queries: [".NET C# SQL"],
+    locations: ["Remote"],
+    maxResults: 25,
+    maxPagesPerSearch: 1,
+  },
   import_jobs: {
     source: "linkedin",
     urls: ["https://www.linkedin.com/jobs/view/example"],

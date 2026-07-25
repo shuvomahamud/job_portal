@@ -92,6 +92,18 @@ export const commandPayloadSchemas = {
       limit: z.number().int().min(1).max(200).optional(),
     })
     .strict(),
+  discover_jobs_browser: z
+    .object({
+      sources: z.array(z.enum(["linkedin", "indeed", "dice"])).min(1).max(3).optional(),
+      queries: z.array(z.string().trim().min(1).max(200)).min(1).max(10),
+      locations: z.array(z.string().trim().min(1).max(200)).min(1).max(10).optional(),
+      maxResults: z.number().int().min(1).max(100).optional(),
+      maxPagesPerSearch: z.number().int().min(1).max(5).optional(),
+      minDelayMs: z.number().int().min(5000).max(120000).optional(),
+      maxDelayMs: z.number().int().min(5000).max(180000).optional(),
+      dryRun: z.boolean().optional(),
+    })
+    .strict(),
   import_jobs: z
     .object({
       source: z.enum(["linkedin", "indeed", "dice", "company_site", "other"]),

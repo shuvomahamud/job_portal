@@ -31,6 +31,7 @@ export const PRIORITIES = ["low", "normal", "high", "urgent"] as const;
 
 export const COMMAND_TYPES = [
   "run_job_search",
+  "discover_jobs_browser",
   "import_jobs",
   "run_rule_filter",
   "run_local_llm_extraction",
