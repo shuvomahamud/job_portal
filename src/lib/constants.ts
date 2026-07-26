@@ -30,6 +30,7 @@ export const FOLLOWUP_STATUSES = [
 export const PRIORITIES = ["low", "normal", "high", "urgent"] as const;
 
 export const COMMAND_TYPES = [
+  "find_matching_jobs",
   "run_job_search",
   "discover_jobs_browser",
   "import_jobs",
@@ -54,6 +55,21 @@ export const COMMAND_STATUSES = [
 
 export const JOB_SOURCES = [
   "linkedin",
+  "indeed",
+  "dice",
+  "company_site",
+  "referral",
+  "manual",
+  "other",
+] as const;
+
+// Historical/manual jobs can retain their original source. Automated discovery
+// is intentionally limited to sources supported by the current workflow.
+export const AUTOMATED_JOB_SOURCES = ["indeed", "dice"] as const;
+
+// LinkedIn remains valid only for historical rows already in the database.
+// New intake and filter UIs deliberately omit it.
+export const SELECTABLE_JOB_SOURCES = [
   "indeed",
   "dice",
   "company_site",

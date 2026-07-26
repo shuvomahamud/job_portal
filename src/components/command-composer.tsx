@@ -7,28 +7,38 @@ import { COMMAND_TYPES, PRIORITIES } from "@/lib/constants";
 import { humanize } from "@/lib/format";
 
 const payloadExamples: Record<(typeof COMMAND_TYPES)[number], object> = {
+  find_matching_jobs: {
+    sources: ["indeed", "dice"],
+    queries: ["senior software engineer"],
+    locations: ["Remote"],
+    maxResults: 10,
+  },
   run_job_search: {
-    sources: ["linkedin", "indeed"],
+    sources: ["indeed", "dice"],
     queries: ["senior software engineer"],
     locations: ["New York", "Remote"],
     limit: 40,
   },
   discover_jobs_browser: {
-    sources: ["linkedin", "indeed", "dice"],
+    sources: ["indeed", "dice"],
     queries: [".NET C# SQL"],
     locations: ["Remote"],
     maxResults: 30,
-    sourceLimits: { linkedin: 10, indeed: 10, dice: 10 },
+    sourceLimits: { indeed: 10, dice: 10 },
     maxPagesPerSearch: 1,
     maxRuntimeMinutes: 30,
   },
   import_jobs: {
-    source: "linkedin",
-    urls: ["https://www.linkedin.com/jobs/view/example"],
+    source: "indeed",
+    urls: ["https://www.indeed.com/viewjob?jk=example"],
   },
   run_rule_filter: { ruleset: "default" },
   run_local_llm_extraction: {
+    parentCommandId: "00000000-0000-4000-8000-000000000000",
+    candidateProfileId: "00000000-0000-4000-8000-000000000000",
     jobIds: ["00000000-0000-4000-8000-000000000000"],
+    promptVersion: "job-match-prompt-v1",
+    policyVersion: "job-match-policy-v1",
   },
   review_top_jobs: { limit: 10, minimumFitScore: 75 },
   review_job: {

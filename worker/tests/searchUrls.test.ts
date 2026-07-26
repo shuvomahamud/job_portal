@@ -4,12 +4,12 @@ import { buildSearchLinkJobs } from "../src/search/searchUrls";
 
 test("buildSearchLinkJobs creates conservative search-link records", () => {
   const jobs = buildSearchLinkJobs([
-    { source: "linkedin", query: ".NET C# SQL", location: "Remote" },
+    { source: "indeed", query: ".NET C# SQL", location: "Remote" },
     { source: "indeed", query: "application support Oracle", location: "Albany NY" },
   ], 10);
   assert.equal(jobs.length, 2);
-  assert.equal(jobs[0].source, "linkedin");
-  assert.match(jobs[0].sourceUrl, /linkedin\.com\/jobs\/search/);
+  assert.equal(jobs[0].source, "indeed");
+  assert.match(jobs[0].sourceUrl, /indeed\.com\/jobs/);
   assert.deepEqual(jobs[0].techStack, [".NET", "C#", "SQL"]);
 });
 

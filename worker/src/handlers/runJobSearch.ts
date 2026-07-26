@@ -4,7 +4,7 @@ import { upsertJobs } from "../db";
 import { buildSearchLinkJobs, type SearchSpec } from "../search/searchUrls";
 import type { HandlerResult } from "../types";
 
-const sources = z.array(z.enum(["linkedin", "indeed", "dice", "company_site", "other"])).min(1).max(10).optional();
+const sources = z.array(z.enum(["indeed", "dice"])).min(1).max(2).optional();
 const payloadSchema = z.object({
   sources,
   queries: z.array(z.string().trim().min(1).max(200)).max(30).optional(),
@@ -25,7 +25,7 @@ export async function handleRunJobSearch(payload: unknown): Promise<HandlerResul
   const cfg = getConfig();
   const input = payloadSchema.parse(payload);
   const limit = Math.min(input.limit ?? cfg.JOB_SEARCH_MAX_RESULTS_PER_COMMAND, cfg.JOB_SEARCH_MAX_RESULTS_PER_COMMAND);
-  const sourcesToUse = input.sources ?? ["linkedin", "indeed", "dice"];
+  const sourcesToUse = input.sources ?? ["indeed", "dice"];
   const queries = input.queries?.length ? input.queries : defaultQueries;
   const locations = input.locations?.length ? input.locations : defaultLocations;
 
@@ -43,7 +43,7 @@ export async function handleRunJobSearch(payload: unknown): Promise<HandlerResul
 
   return {
     mode: "lightweight_search_links",
-    message: "Generated searchable job-source links without account automation or heavy scraping. Open links and import promising job URLs.",
+    message: "Generated Indeed/Dice search links without account automation. Use Find matching jobs for individual posting discovery and AI review.",
     generated: jobs.length,
     upserted: upserted.length,
     sources: sourcesToUse,

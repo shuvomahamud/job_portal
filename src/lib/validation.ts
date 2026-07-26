@@ -1,6 +1,7 @@
 import { z } from "zod";
 import {
   APPLICATION_STATUSES,
+  AUTOMATED_JOB_SOURCES,
   COMMAND_TYPES,
   FOLLOWUP_STATUSES,
   JOB_SOURCES,
@@ -67,6 +68,7 @@ export const jobUpdateSchema = z
   });
 
 export const jobsQuerySchema = z.object({
+  visibility: z.enum(["dashboard", "all"]).default("dashboard"),
   status: z.enum(JOB_STATUSES).optional(),
   source: z.string().trim().max(100).optional(),
   company: z.string().trim().max(300).optional(),
@@ -76,17 +78,25 @@ export const jobsQuerySchema = z.object({
   offset: z.coerce.number().int().min(0).default(0),
 });
 
-const sources = z
-  .array(z.enum(["linkedin", "indeed", "dice", "company_site", "other"]))
+const automatedSources = z
+  .array(z.enum(AUTOMATED_JOB_SOURCES))
   .min(1)
-  .max(10)
+  .max(2)
   .optional();
 const jobIds = z.array(z.uuid()).min(1).max(100);
 
 export const commandPayloadSchemas = {
+  find_matching_jobs: z
+    .object({
+      sources: z.array(z.enum(AUTOMATED_JOB_SOURCES)).min(1).max(2).default(["indeed", "dice"]),
+      queries: z.array(z.string().trim().min(1).max(200)).min(1).max(10),
+      locations: z.array(z.string().trim().min(1).max(200)).min(1).max(10),
+      maxResults: z.number().int().min(1).max(50).default(10),
+    })
+    .strict(),
   run_job_search: z
     .object({
-      sources,
+      sources: automatedSources,
       queries: z.array(z.string().trim().min(1).max(200)).max(30).optional(),
       locations: z.array(z.string().trim().min(1).max(200)).max(30).optional(),
       limit: z.number().int().min(1).max(200).optional(),
@@ -94,13 +104,12 @@ export const commandPayloadSchemas = {
     .strict(),
   discover_jobs_browser: z
     .object({
-      sources: z.array(z.enum(["linkedin", "indeed", "dice"])).min(1).max(3).optional(),
+      sources: z.array(z.enum(AUTOMATED_JOB_SOURCES)).min(1).max(2).optional(),
       queries: z.array(z.string().trim().min(1).max(200)).min(1).max(10),
       locations: z.array(z.string().trim().min(1).max(200)).min(1).max(10).optional(),
       maxResults: z.number().int().min(1).max(100).optional(),
       sourceLimits: z
         .object({
-          linkedin: z.number().int().min(0).max(100).optional(),
           indeed: z.number().int().min(0).max(100).optional(),
           dice: z.number().int().min(0).max(100).optional(),
         })
@@ -129,8 +138,12 @@ export const commandPayloadSchemas = {
     .strict(),
   run_local_llm_extraction: z
     .object({
+      parentCommandId: z.uuid(),
+      candidateProfileId: z.uuid(),
       jobIds,
       model: z.string().trim().min(1).max(100).optional(),
+      promptVersion: z.literal("job-match-prompt-v1"),
+      policyVersion: z.literal("job-match-policy-v1"),
     })
     .strict(),
   review_top_jobs: z

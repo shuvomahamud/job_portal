@@ -13,7 +13,7 @@ export default function ImportPage() {
         <ImportJobForm />
         <aside className="space-y-4">
           <div className="panel p-5">
-            <p className="eyebrow">Phase 1 boundary</p>
+            <p className="eyebrow">Manual intake boundary</p>
             <ul className="mt-4 space-y-3 text-sm leading-6 text-[var(--muted)]">
               <li>• No page scraping or browser cookies.</li>
               <li>• No automatic application submission.</li>

@@ -1,22 +1,22 @@
 import { AlertTriangle, Ban, RotateCcw } from "lucide-react";
-import { CommandComposer } from "@/components/command-composer";
 import { EmptyState, PageHeader, StatusBadge } from "@/components/ui";
+import { requireDashboardUser } from "@/lib/auth";
 import { compactJson, formatDateTime, humanize } from "@/lib/format";
 import { listCommands } from "@/services/commands";
 import { cancelQueuedCommand, retryCommand } from "../actions";
 
 export default async function CommandsPage() {
-  const commandRows = await listCommands({ limit: 100 });
+  const user = await requireDashboardUser();
+  const commandRows = await listCommands({ limit: 100, requestedBy: user.id });
 
   return (
     <>
       <PageHeader
         eyebrow="Auditable automation"
-        title="Command center"
-        description="Every future system action starts as a validated, inspectable record. Workers execute only allow-listed types."
+        title="Automation audit"
+        description="Matching runs are created from the overview. This page is an advanced audit trail, not a manual command console."
       />
-      <div className="grid gap-6 xl:grid-cols-[380px_minmax(0,1fr)]">
-        <CommandComposer />
+      <div>
         <section className="panel overflow-hidden">
           <div className="flex items-center justify-between border-b border-[var(--line)] px-5 py-5 sm:px-6">
             <div>
@@ -116,9 +116,8 @@ export default async function CommandsPage() {
       </div>
       <div className="mt-6 flex items-start gap-3 rounded-2xl border border-amber-900/10 bg-amber-100/50 p-4 text-sm leading-6 text-amber-950">
         <AlertTriangle className="mt-0.5 size-4 shrink-0" />
-        Phase 1 records commands only. A future VPS worker will claim and execute
-        them through a fixed dispatcher; payload content is never evaluated as a
-        shell command.
+        The VPS and Mac workers claim only fixed, allow-listed command types.
+        Payload content is never evaluated as a shell command.
       </div>
     </>
   );

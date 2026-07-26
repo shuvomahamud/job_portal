@@ -1,23 +1,23 @@
 [Unit]
-Description=Searchlight Phase 2 Job Worker
+Description=Job Portal VPS Discovery Worker
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=/opt/job-worker/job_portal
+WorkingDirectory=/home/shuvo/project/job_portal
 Environment=NODE_ENV=production
-Environment=WORKER_ENV_FILE=/opt/job-worker/.env
+Environment=WORKER_ENV_FILE=/home/shuvo/.job-portal/vps-worker.env
 ExecStart=/usr/bin/npm run worker:start
 Restart=always
 RestartSec=10
-User=jobworker
-Group=jobworker
+User=shuvo
+Group=shuvo
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
-ProtectHome=true
-ReadWritePaths=/opt/job-worker
+ProtectHome=read-only
+ReadWritePaths=/home/shuvo/project/job_portal /home/shuvo/.job-portal /home/shuvo/.job-worker-browser-profile
 
 [Install]
 WantedBy=multi-user.target

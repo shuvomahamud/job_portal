@@ -5,6 +5,7 @@ import {
   eq,
   gte,
   ilike,
+  notInArray,
   or,
   type SQL,
 } from "drizzle-orm";
@@ -70,6 +71,9 @@ export async function listJobs(query: z.infer<typeof jobsQuerySchema>) {
       ilike(jobs.location, `%${query.search}%`),
     );
     if (searchCondition) conditions.push(searchCondition);
+  }
+  if (query.visibility === "dashboard" && !query.status) {
+    conditions.push(notInArray(jobs.status, ["new", "reviewing", "archived"]));
   }
 
   return getDb()

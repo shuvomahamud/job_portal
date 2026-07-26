@@ -7,7 +7,6 @@ import {
   BriefcaseBusiness,
   CalendarClock,
   CircleGauge,
-  Command,
   FileInput,
   Settings,
   UserRound,
@@ -20,7 +19,6 @@ const navItems = [
   { href: "/jobs", label: "Jobs", icon: BriefcaseBusiness },
   { href: "/import", label: "Import", icon: FileInput },
   { href: "/profile", label: "Profile hub", icon: UserRound },
-  { href: "/commands", label: "Commands", icon: Command },
   { href: "/follow-ups", label: "Follow-ups", icon: CalendarClock },
   { href: "/settings", label: "Settings & API", icon: Settings },
 ];

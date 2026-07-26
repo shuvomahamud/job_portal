@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { getConfig, sleep } from "../config";
-import { addCommandEvent, getCommandStatus, upsertJobs } from "../db";
+import { addCommandEvent, getCommandStatus, getExistingUrls, upsertJobs } from "../db";
 import {
   buildBrowserSearchUrl,
   extractJobUrlsFromHtml,
@@ -12,14 +12,13 @@ import type { HandlerContext, HandlerResult } from "../types";
 
 const sourceLimitsSchema = z
   .object({
-    linkedin: z.number().int().min(0).max(100).optional(),
     indeed: z.number().int().min(0).max(100).optional(),
     dice: z.number().int().min(0).max(100).optional(),
   })
   .strict();
 
 const payloadSchema = z.object({
-  sources: z.array(z.enum(["linkedin", "indeed", "dice"])).min(1).max(3).default(["indeed", "dice"]).optional(),
+  sources: z.array(z.enum(["indeed", "dice"])).min(1).max(2).default(["indeed", "dice"]).optional(),
   queries: z.array(z.string().trim().min(1).max(200)).min(1).max(10),
   locations: z.array(z.string().trim().min(1).max(200)).min(1).max(10).default(["Remote"]).optional(),
   maxResults: z.number().int().min(1).max(100).optional(),
@@ -29,6 +28,7 @@ const payloadSchema = z.object({
   minDelayMs: z.number().int().min(5000).max(120000).optional(),
   maxDelayMs: z.number().int().min(5000).max(180000).optional(),
   dryRun: z.boolean().default(false).optional(),
+  initialStatus: z.enum(["new", "reviewing"]).default("new").optional(),
 }).strict();
 
 type PlaywrightModule = {
@@ -84,6 +84,7 @@ export async function handleDiscoverJobsBrowser(payload: unknown, context: Handl
   const upsertedIds: string[] = [];
   const visitedSearches: string[] = [];
   let stopReason: StopReason = "completed";
+  let duplicateCount = 0;
 
   await addCommandEvent(context.command.id, "browser_discovery_started", "Browser discovery started with a 30-minute maximum runtime cap.", {
     sources,
@@ -100,7 +101,8 @@ export async function handleDiscoverJobsBrowser(payload: unknown, context: Handl
     outer: for (const source of sources) {
       for (const query of input.queries) {
         for (const location of locations) {
-          const checkpoint = await shouldStop(context.command.id, deadlineAt, discovered.size, maxResults, source, foundBySource, sourceLimits);
+          if (foundBySource[source] >= sourceLimits[source]) continue outer;
+          const checkpoint = await shouldStop(context.command.id, deadlineAt, discovered.size, maxResults);
           if (checkpoint) {
             stopReason = checkpoint;
             break outer;
@@ -125,13 +127,15 @@ export async function handleDiscoverJobsBrowser(payload: unknown, context: Handl
           const remainingSource = sourceLimits[source] - foundBySource[source];
           const urls = extractJobUrlsFromHtml(source, html, searchUrl, Math.max(0, Math.min(remainingGlobal, remainingSource)))
             .filter((url) => !discovered.has(url));
+          const existingUrls = input.dryRun ? new Set<string>() : await getExistingUrls(urls);
+          duplicateCount += existingUrls.size;
 
           for (const url of urls) discovered.add(url);
           foundBySource[source] += urls.length;
 
           let savedThisSearch = 0;
           for (const url of urls) {
-            const detailStop = await shouldStop(context.command.id, deadlineAt, discovered.size, maxResults, source, foundBySource, sourceLimits);
+            const detailStop = await shouldStop(context.command.id, deadlineAt, 0, Number.MAX_SAFE_INTEGER);
             if (detailStop && detailStop !== "quota_reached") {
               stopReason = detailStop;
               break outer;
@@ -156,6 +160,7 @@ export async function handleDiscoverJobsBrowser(payload: unknown, context: Handl
             }
 
             const job = extractJobDetail(source, url, detailHtml, { query, location });
+            job.status = input.initialStatus ?? "new";
             if (extractionFailed) {
               job.notes = `${job.notes ?? ""} Detail page navigation failed; source URL preserved for manual review.`.trim();
             }
@@ -204,6 +209,8 @@ export async function handleDiscoverJobsBrowser(payload: unknown, context: Handl
     dryRun: input.dryRun ?? false,
     visitedSearchCount: visitedSearches.length,
     discoveredCount: discovered.size,
+    duplicateCount,
+    newCount: Math.max(0, discovered.size - duplicateCount),
     upserted: upsertedIds.length,
     sources,
     queries: input.queries,
@@ -256,15 +263,11 @@ async function shouldStop(
   deadlineAt: number,
   discoveredCount: number,
   maxResults: number,
-  source: BrowserDiscoverySource,
-  foundBySource: Record<BrowserDiscoverySource, number>,
-  sourceLimits: Record<BrowserDiscoverySource, number>,
 ): Promise<StopReason | null> {
   if (Date.now() >= deadlineAt) return "time_limit";
   const status = await getCommandStatus(commandId);
   if (status === "canceled") return "canceled";
   if (discoveredCount >= maxResults) return "quota_reached";
-  if (foundBySource[source] >= sourceLimits[source]) return "quota_reached";
   return null;
 }
 

@@ -46,10 +46,10 @@ export async function POST(request: Request) {
 
 export async function GET(request: Request) {
   return handleApi(async () => {
-    await requireDashboardUser();
+    const user = await requireDashboardUser();
     const query = commandQuerySchema.parse(
       Object.fromEntries(new URL(request.url).searchParams),
     );
-    return jsonOk(await listCommands(query));
+    return jsonOk(await listCommands({ ...query, requestedBy: user.id }));
   });
 }

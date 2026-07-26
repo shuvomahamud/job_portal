@@ -1,4 +1,5 @@
 export type CommandType =
+  | "find_matching_jobs"
   | "run_job_search"
   | "discover_jobs_browser"
   | "import_jobs"
@@ -17,6 +18,7 @@ export type JobSource = "linkedin" | "indeed" | "dice" | "company_site" | "refer
 
 export type DashboardCommand = {
   id: string;
+  parentCommandId?: string | null;
   type: CommandType;
   source: string;
   requestedBy: string;

@@ -13,7 +13,7 @@ async function main() {
   const command = commandCreateSchema.parse({
     type: "run_job_search",
     payloadJson: {
-      sources: ["linkedin"],
+      sources: ["indeed"],
       queries: ["senior software engineer"],
       limit: 25,
     },
@@ -23,7 +23,7 @@ async function main() {
 
   assert.throws(() =>
     validateCommandPayload("run_job_search", {
-      sources: ["linkedin"],
+      sources: ["indeed"],
       shell: "rm -rf /",
     }),
   );

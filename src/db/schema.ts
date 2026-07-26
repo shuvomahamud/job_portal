@@ -11,6 +11,7 @@ import {
   timestamp,
   uniqueIndex,
   uuid,
+  type AnyPgColumn,
 } from "drizzle-orm/pg-core";
 
 export const jobStatusEnum = pgEnum("job_status", [
@@ -50,6 +51,7 @@ export const followupStatusEnum = pgEnum("followup_status", [
 ]);
 
 export const commandTypeEnum = pgEnum("command_type", [
+  "find_matching_jobs",
   "run_job_search",
   "discover_jobs_browser",
   "import_jobs",
@@ -168,6 +170,19 @@ export const candidateProfiles = pgTable(
     githubUrl: text("github_url"),
     portfolioUrl: text("portfolio_url"),
     summary: text("summary"),
+    skills: text("skills")
+      .array()
+      .default(sql`ARRAY[]::text[]`)
+      .notNull(),
+    preferredEmploymentTypes: text("preferred_employment_types")
+      .array()
+      .default(sql`ARRAY[]::text[]`)
+      .notNull(),
+    dealBreakers: text("deal_breakers")
+      .array()
+      .default(sql`ARRAY[]::text[]`)
+      .notNull(),
+    matchingInstructions: text("matching_instructions"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
@@ -318,6 +333,10 @@ export const commands = pgTable(
   "commands",
   {
     id: uuid("id").defaultRandom().primaryKey(),
+    parentCommandId: uuid("parent_command_id").references(
+      (): AnyPgColumn => commands.id,
+      { onDelete: "set null" },
+    ),
     type: commandTypeEnum("type").notNull(),
     source: commandSourceEnum("source").notNull(),
     requestedBy: text("requested_by").notNull(),
@@ -349,6 +368,7 @@ export const commands = pgTable(
       table.priority,
     ),
     index("commands_type_idx").on(table.type),
+    index("commands_parent_idx").on(table.parentCommandId),
   ],
 );
 
@@ -403,7 +423,13 @@ export const jobsRelations = relations(jobs, ({ many }) => ({
   followups: many(followups),
 }));
 
-export const commandsRelations = relations(commands, ({ many }) => ({
+export const commandsRelations = relations(commands, ({ one, many }) => ({
+  parent: one(commands, {
+    fields: [commands.parentCommandId],
+    references: [commands.id],
+    relationName: "command_parent",
+  }),
+  children: many(commands, { relationName: "command_parent" }),
   events: many(commandEvents),
 }));
 

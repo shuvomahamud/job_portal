@@ -25,8 +25,9 @@
     "worker:dev": "tsx worker/src/runner.ts",
     "worker:start": "tsx worker/src/runner.ts",
     "worker:health": "tsx worker/src/health.ts",
+    "worker:ollama-smoke": "tsx worker/scripts/ollama-smoke.ts",
     "worker:typecheck": "tsc -p worker/tsconfig.json --noEmit",
-    "worker:test": "tsx --test worker/tests/searchUrls.test.ts worker/tests/ruleEngine.test.ts worker/tests/browserDiscovery.test.ts worker/tests/jobDetailExtraction.test.ts"
+    "worker:test": "tsx --test worker/tests/*.test.ts"
   },
   "dependencies": {
     "@clerk/nextjs": "^7.6.1",

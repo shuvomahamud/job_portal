@@ -8,6 +8,13 @@
       "when": 1784960512501,
       "tag": "0000_gigantic_sue_storm",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1785085100983,
+      "tag": "0002_ai_profile_job_matching",
+      "breakpoints": true
     }
   ]
 }

@@ -1,13 +1,13 @@
 import Link from "next/link";
-import { ExternalLink, Plus, Search } from "lucide-react";
+import { ExternalLink, Search, SearchCheck } from "lucide-react";
 import {
   EmptyState,
   PageHeader,
 } from "@/components/ui";
 import {
-  JOB_SOURCES,
   JOB_STATUSES,
   PRIORITIES,
+  SELECTABLE_JOB_SOURCES,
 } from "@/lib/constants";
 import { formatDate, humanize } from "@/lib/format";
 import { jobsQuerySchema } from "@/lib/validation";
@@ -41,8 +41,8 @@ export default async function JobsPage({
         title="Jobs"
         description={`${jobRows.length} role${jobRows.length === 1 ? "" : "s"} in this view. Filter the signal, then move the best work forward.`}
         action={
-          <Link href="/import" className="primary-button">
-            <Plus className="size-4" /> Import job
+          <Link href="/" className="primary-button">
+            <SearchCheck className="size-4" /> Find matching jobs
           </Link>
         }
       />
@@ -67,7 +67,7 @@ export default async function JobsPage({
         </select>
         <select name="source" defaultValue={query.source ?? ""} aria-label="Source">
           <option value="">All sources</option>
-          {JOB_SOURCES.map((source) => (
+          {SELECTABLE_JOB_SOURCES.map((source) => (
             <option key={source} value={source}>
               {humanize(source)}
             </option>
@@ -178,9 +178,9 @@ export default async function JobsPage({
         ) : (
           <EmptyState
             title="No jobs match this view"
-            description="Clear a filter or add a role manually. Phase 1 does not fetch jobs automatically."
-            href="/import"
-            action="Import a job"
+            description="Start a matching run from the overview to discover and evaluate real Indeed and Dice postings."
+            href="/"
+            action="Find matching jobs"
           />
         )}
       </section>

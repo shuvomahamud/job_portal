@@ -3,6 +3,7 @@ import { claimCommand, completeCommand, failCommand } from "./dashboardClient";
 import { addCommandEvent, recoverStaleClaims } from "./db";
 import { dispatchCommand, supportedPhase2CommandTypes } from "./dispatcher";
 import { logger } from "./logger";
+import { verifyOllamaHealth } from "./ai/ollamaClient";
 import type { DashboardCommand } from "./types";
 
 let stopping = false;
@@ -44,6 +45,21 @@ export async function runWorkerLoop() {
   const commandTypes = cfg.workerCommandTypes.filter((type) => supportedPhase2CommandTypes().includes(type));
   if (!commandTypes.length) {
     throw new Error(`No Phase 2 command types enabled. Supported: ${supportedPhase2CommandTypes().join(", ")}`);
+  }
+  if (commandTypes.includes("run_local_llm_extraction")) {
+    try {
+      await verifyOllamaHealth({
+        baseUrl: cfg.OLLAMA_BASE_URL,
+        model: cfg.OLLAMA_MODEL,
+        requestTimeoutMs: cfg.OLLAMA_REQUEST_TIMEOUT_MS,
+        keepAlive: cfg.OLLAMA_KEEP_ALIVE,
+      });
+      logger.info("Local Ollama health check passed", { model: cfg.OLLAMA_MODEL });
+    } catch (error) {
+      logger.warn("Local Ollama health check failed; matching commands will retry when claimed.", {
+        error: error instanceof Error ? error.message : "Unknown Ollama health error",
+      });
+    }
   }
   logger.info("Starting Phase 2 job worker", {
     workerId: cfg.WORKER_ID,

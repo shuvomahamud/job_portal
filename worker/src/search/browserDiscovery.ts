@@ -1,6 +1,6 @@
 import type { JobSource, NormalizedJobInput } from "../types";
 
-export type BrowserDiscoverySource = Extract<JobSource, "linkedin" | "indeed" | "dice">;
+export type BrowserDiscoverySource = Extract<JobSource, "indeed" | "dice">;
 
 export type BrowserDiscoverySpec = {
   source: BrowserDiscoverySource;
@@ -14,7 +14,6 @@ export type HumanDelayOptions = {
 };
 
 const sourceHosts: Record<BrowserDiscoverySource, string[]> = {
-  linkedin: ["linkedin.com"],
   indeed: ["indeed.com"],
   dice: ["dice.com"],
 };
@@ -23,8 +22,6 @@ export function buildBrowserSearchUrl(spec: BrowserDiscoverySpec) {
   const query = encodeURIComponent(spec.query.trim());
   const location = spec.location ? encodeURIComponent(spec.location.trim()) : "";
   switch (spec.source) {
-    case "linkedin":
-      return `https://www.linkedin.com/jobs/search/?keywords=${query}${location ? `&location=${location}` : ""}`;
     case "indeed":
       return `https://www.indeed.com/jobs?q=${query}${location ? `&l=${location}` : ""}`;
     case "dice":
@@ -76,7 +73,6 @@ function decodeHtmlAttribute(value: string) {
 function looksLikeJobUrl(source: BrowserDiscoverySource, url: URL) {
   const path = url.pathname.toLowerCase();
   const params = url.searchParams;
-  if (source === "linkedin") return path.includes("/jobs/view") || params.has("currentJobId");
   if (source === "indeed") return path.includes("/viewjob") || params.has("jk");
   if (source === "dice") return path.includes("/job-detail") || path.includes("/jobs/detail");
   return false;

@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { eq } from "drizzle-orm";
 import {
   ArrowRight,
   BriefcaseBusiness,
@@ -10,6 +11,11 @@ import {
   Sparkles,
 } from "lucide-react";
 import { MetricCard, SectionHeading, StatusBadge } from "@/components/ui";
+import { FindMatchingJobsForm } from "@/components/find-matching-jobs-form";
+import { MatchingRunStatus } from "@/components/matching-run-status";
+import { getDb } from "@/db";
+import { candidateProfiles } from "@/db/schema";
+import { requireDashboardUser } from "@/lib/auth";
 import { formatDate, humanize } from "@/lib/format";
 import { jobsQuerySchema } from "@/lib/validation";
 import { listCommands } from "@/services/commands";
@@ -17,11 +23,23 @@ import { getDashboardSummary } from "@/services/dashboard";
 import { listJobs } from "@/services/jobs";
 
 export default async function DashboardPage() {
-  const [summary, recentJobs, recentCommands] = await Promise.all([
+  const user = await requireDashboardUser();
+  const [summary, recentJobs, recentCommands, profiles, latestRuns] = await Promise.all([
     getDashboardSummary(),
     listJobs(jobsQuerySchema.parse({ limit: 5 })),
-    listCommands({ limit: 4 }),
+    listCommands({ limit: 4, requestedBy: user.id }),
+    getDb().select().from(candidateProfiles).where(eq(candidateProfiles.userId, user.id)).limit(1),
+    listCommands({ type: "find_matching_jobs", requestedBy: user.id, limit: 1 }),
   ]);
+  const profile = profiles[0];
+  const profileReady = Boolean(
+    profile?.targetTitles.length &&
+      profile.targetLocations.length &&
+      profile.workAuthorizationAnswer?.trim() &&
+      profile.sponsorshipAnswer?.trim() &&
+      profile.summary?.trim() &&
+      (profile.skills.length || profile.summary.trim().length >= 100),
+  );
 
   const metrics = [
     {
@@ -95,6 +113,15 @@ export default async function DashboardPage() {
         ))}
       </div>
 
+      <FindMatchingJobsForm
+        defaults={{
+          targetTitles: profile?.targetTitles ?? [],
+          targetLocations: profile?.targetLocations ?? [],
+          profileReady,
+        }}
+      />
+      {latestRuns[0] && <MatchingRunStatus rootCommandId={latestRuns[0].id} />}
+
       <div className="mt-10 grid gap-6 xl:grid-cols-[1.55fr_.85fr]">
         <section className="panel p-5 sm:p-7">
           <SectionHeading
@@ -134,7 +161,7 @@ export default async function DashboardPage() {
             ))}
             {!recentJobs.length && (
               <div className="py-12 text-center text-sm text-[var(--muted)]">
-                Import your first job to start the pipeline.
+                Start a matching run to discover jobs from Indeed and Dice.
               </div>
             )}
           </div>

@@ -10,6 +10,15 @@ export type ExtractedJobDetail = NormalizedJobInput & {
   extractionNotes: string[];
 };
 
+export function hasUsableJobDetail(job: Pick<ExtractedJobDetail, "title" | "company" | "description">) {
+  return !(
+    /discovered job|untitled role/i.test(job.title) ||
+    /browser discovery|unknown company/i.test(job.company) ||
+    job.description.length < 400 ||
+    /captcha|access denied|sign in to continue|job has expired|no longer available|verify you are human/i.test(job.description)
+  );
+}
+
 type JsonLdJobPosting = {
   "@type"?: string | string[];
   title?: string;
@@ -197,7 +206,7 @@ function firstLongSection(html: string, text: string) {
 
 function cleanTitle(source: BrowserDiscoverySource, title?: string) {
   if (!title) return undefined;
-  const separators = source === "indeed" ? [/ - .+? \| Indeed/i, / jobs, employment in .+? \| Indeed/i] : [/ \| Dice\.com/i, / \| LinkedIn/i];
+  const separators = source === "indeed" ? [/ - .+? \| Indeed/i, / jobs, employment in .+? \| Indeed/i] : [/ \| Dice\.com/i];
   let cleaned = title;
   for (const pattern of separators) cleaned = cleaned.replace(pattern, "");
   return cleaned.replace(/\s+/g, " ").trim() || undefined;

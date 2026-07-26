@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.jobportal.ai-worker</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/zsh</string>
+    <string>-lc</string>
+    <string>source /Users/shuvomahamud/.nvm/nvm.sh &amp;&amp; npm run worker:start</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/Users/shuvomahamud/Projects/Job Portal</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>NODE_ENV</key>
+    <string>production</string>
+    <key>WORKER_ENV_FILE</key>
+    <string>/Users/shuvomahamud/.job-portal/ai-worker.env</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>/Users/shuvomahamud/.job-portal/logs/ai-worker.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/shuvomahamud/.job-portal/logs/ai-worker.err.log</string>
+</dict>
+</plist>

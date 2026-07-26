@@ -7,8 +7,8 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> },
 ) {
   return handleApi(async () => {
-    await requireDashboardUser();
-    const command = await getCommandDetail((await params).id);
+    const user = await requireDashboardUser();
+    const command = await getCommandDetail((await params).id, user.id);
     if (!command) throw new ApiError(404, "NOT_FOUND", "Command not found.");
     return jsonOk(command);
   });

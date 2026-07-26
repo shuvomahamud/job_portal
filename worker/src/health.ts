@@ -2,16 +2,27 @@ import { sql } from "drizzle-orm";
 import { getConfig } from "./config";
 import { getWorkerDb } from "./db";
 import { supportedPhase2CommandTypes } from "./dispatcher";
+import { verifyOllamaHealth } from "./ai/ollamaClient";
 
 async function main() {
   const cfg = getConfig();
   await getWorkerDb().execute(sql`SELECT 1`);
+  const commandTypes = cfg.workerCommandTypes.filter((type) => supportedPhase2CommandTypes().includes(type));
+  if (commandTypes.includes("run_local_llm_extraction")) {
+    await verifyOllamaHealth({
+      baseUrl: cfg.OLLAMA_BASE_URL,
+      model: cfg.OLLAMA_MODEL,
+      requestTimeoutMs: cfg.OLLAMA_REQUEST_TIMEOUT_MS,
+      keepAlive: cfg.OLLAMA_KEEP_ALIVE,
+    });
+  }
   console.log(JSON.stringify({
     ok: true,
     workerId: cfg.WORKER_ID,
     dashboardBaseUrl: cfg.DASHBOARD_BASE_URL,
     pollIntervalSeconds: cfg.WORKER_POLL_INTERVAL_SECONDS,
-    commandTypes: cfg.workerCommandTypes.filter((type) => supportedPhase2CommandTypes().includes(type)),
+    commandTypes,
+    ollamaModel: commandTypes.includes("run_local_llm_extraction") ? cfg.OLLAMA_MODEL : null,
   }, null, 2));
 }
 

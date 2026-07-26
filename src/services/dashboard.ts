@@ -16,7 +16,7 @@ export async function getDashboardSummary() {
     SELECT
       (SELECT COUNT(*)::int FROM jobs WHERE created_at >= CURRENT_DATE)
         AS jobs_found_today,
-      (SELECT COUNT(*)::int FROM jobs WHERE status IN ('new', 'needs_review'))
+      (SELECT COUNT(*)::int FROM jobs WHERE status = 'needs_review')
         AS jobs_needing_review,
       (SELECT COUNT(*)::int FROM jobs WHERE status = 'ready_to_apply')
         AS ready_to_apply,
@@ -66,9 +66,9 @@ export async function getDashboardSummary() {
               href: "/jobs?status=needs_review",
             }
           : {
-              label: "Import a promising role",
-              detail: "Add a job description to keep the pipeline moving",
-              href: "/import",
+              label: "Find matching jobs",
+              detail: "Search Indeed and Dice, then let local AI review each posting",
+              href: "/",
             };
 
   return {

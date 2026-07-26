@@ -67,6 +67,10 @@ export async function saveCandidateProfile(formData: FormData) {
     workAuthorizationAnswer: z.string().max(5_000).nullable(),
     sponsorshipAnswer: z.string().max(5_000).nullable(),
     salaryExpectation: z.string().max(500).nullable(),
+    skills: z.array(z.string().min(1).max(200)).max(100),
+    preferredEmploymentTypes: z.array(z.string().min(1).max(100)).max(20),
+    dealBreakers: z.array(z.string().min(1).max(300)).max(30),
+    matchingInstructions: z.string().max(4_000).nullable(),
     linkedinUrl: optionalHttpUrl,
     githubUrl: optionalHttpUrl,
     portfolioUrl: optionalHttpUrl,
@@ -81,6 +85,10 @@ export async function saveCandidateProfile(formData: FormData) {
     ),
     sponsorshipAnswer: optionalString(formData, "sponsorshipAnswer"),
     salaryExpectation: optionalString(formData, "salaryExpectation"),
+    skills: commaList(formData, "skills"),
+    preferredEmploymentTypes: commaList(formData, "preferredEmploymentTypes"),
+    dealBreakers: commaList(formData, "dealBreakers"),
+    matchingInstructions: optionalString(formData, "matchingInstructions"),
     linkedinUrl: optionalString(formData, "linkedinUrl"),
     githubUrl: optionalString(formData, "githubUrl"),
     portfolioUrl: optionalString(formData, "portfolioUrl"),
@@ -193,7 +201,7 @@ export async function queueJobReprocess(jobId: string) {
 export async function retryCommand(commandId: string) {
   const user = await requireDashboardUser();
   const id = z.uuid().parse(commandId);
-  const failed = await getCommandDetail(id);
+  const failed = await getCommandDetail(id, user.id);
   if (!failed || failed.status !== "failed") return;
   const retried = await createCommand(
     {

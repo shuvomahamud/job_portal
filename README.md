@@ -1,12 +1,12 @@
 # Searchlight — Job Command Center
 
-Searchlight is Phase 1 of a job-search automation system. It is a private
-Next.js dashboard, Neon Postgres system of record, and structured command queue
-designed for Vercel.
+Searchlight is a private job-matching dashboard with a Next.js control plane,
+Neon/Postgres command queue, a VPS discovery worker, and a Mac local-AI worker.
 
-This phase provides the foundation only. It does **not** scrape job sites, run
-local models, call Codex, submit applications, control a browser, or execute n8n
-workflows.
+The normal user workflow is **Find matching jobs**. It discovers individual
+Indeed and Dice postings, stages them invisibly, evaluates them against the
+candidate profile with local Ollama, and shows only matches or explicit review
+cases. It never submits an application.
 
 ## What is included
 
@@ -16,7 +16,11 @@ workflows.
 - Applications, reviews, and follow-up data models
 - An allow-listed, auditable command queue
 - Atomic worker command claiming with `FOR UPDATE SKIP LOCKED`
-- Scoped APIs for Hermes, a future VPS worker, n8n, and a browser extension
+- Scoped APIs for Hermes, the VPS worker, n8n, and a browser extension
+- Indeed/Dice-only browser discovery with individual-detail extraction
+- Mac Ollama `qwen3.5:9b` structured profile matching
+- Deterministic match policy and optional remote review for uncertain results
+- Parent/child matching-run progress and an auditable review trail
 - Drizzle schema, generated Postgres migration, idempotent sample seed data
 - Zod request and command-payload validation
 - Clean JSON API errors and smoke tests for the security boundary
@@ -226,8 +230,21 @@ All responses use one of these shapes:
 | `POST /api/worker/fail-command` | Worker secret |
 | `POST /api/n8n/events` | n8n secret |
 | `GET /api/dashboard/summary` | Clerk dashboard session |
+| `GET /api/matching-runs/:id` | Clerk dashboard session, run owner only |
 | `GET /api/extension/profile` | Extension secret |
 | `GET /api/extension/job/:id` | Extension secret |
+
+## Matching workflow
+
+The overview page creates a `find_matching_jobs` root command. The VPS claims
+it, discovers individual Indeed/Dice postings, applies deterministic hard
+filters, and creates a `run_local_llm_extraction` child command. The Mac claims
+only that child command, calls loopback Ollama, validates the evidence, and
+applies the deterministic decision policy. Archived or processing jobs are not
+shown in the normal dashboard.
+
+For the detailed machine setup, data contract, uncertainty policy, tests, and
+deployment checklist, see [the implementation guide](docs/ai-profile-job-matching-implementation-guide.md).
 
 ## How Hermes creates commands
 
@@ -238,19 +255,20 @@ curl -X POST "$APP_BASE_URL/api/commands" \
   -H "Authorization: Bearer $HERMES_COMMAND_SECRET" \
   -H "Content-Type: application/json" \
   -d '{
-    "type": "run_job_search",
+    "type": "find_matching_jobs",
     "priority": "high",
     "payloadJson": {
-      "sources": ["linkedin", "indeed"],
+      "sources": ["indeed", "dice"],
       "queries": ["senior product engineer"],
       "locations": ["New York", "Remote"],
-      "limit": 40
+      "maxResults": 10
     }
   }'
 ```
 
 Allowed command types:
 
+- `find_matching_jobs`
 - `run_job_search`
 - `import_jobs`
 - `run_rule_filter`
@@ -268,7 +286,7 @@ same list. Payload objects are strict, and keys such as `shell`, `script`,
 `command`, `cmd`, `executable`, and `argv` are rejected recursively. Nothing in
 the app evaluates payload strings as code.
 
-## How the future VPS worker claims commands
+## How a worker claims commands
 
 Claim the next due command. The database selects the highest priority item and
 locks it atomically so concurrent workers cannot claim the same row.
@@ -393,7 +411,7 @@ See `worker/README.md` for env vars, systemd deployment, and command payload exa
 
 - Add local LLM extraction behind `run_local_llm_extraction`.
 - Add deterministic rule filtering and persisted rule versions.
-- Add Codex review behind `review_job` and `review_top_jobs`.
+- Expand the opt-in remote reviewer only after evaluating representative jobs.
 - Store review provenance, model/version metadata, and structured outputs.
 
 ### Phase 4 — assisted application workflow

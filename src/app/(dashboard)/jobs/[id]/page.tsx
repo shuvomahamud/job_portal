@@ -3,8 +3,6 @@ import { notFound } from "next/navigation";
 import {
   ArrowLeft,
   ExternalLink,
-  RefreshCw,
-  Sparkles,
 } from "lucide-react";
 import { z } from "zod";
 import {
@@ -18,8 +16,6 @@ import {
 import { formatDate, formatDateTime, humanize } from "@/lib/format";
 import { getJobDetail } from "@/services/jobs";
 import {
-  queueJobReprocess,
-  queueJobReview,
   updateJobStatus,
 } from "../../actions";
 
@@ -61,16 +57,6 @@ export default async function JobDetailPage({
           >
             Source <ExternalLink className="size-4" />
           </a>
-          <form action={queueJobReprocess.bind(null, job.id)}>
-            <button className="secondary-button">
-              <RefreshCw className="size-4" /> Reprocess
-            </button>
-          </form>
-          <form action={queueJobReview.bind(null, job.id)}>
-            <button className="primary-button">
-              <Sparkles className="size-4" /> Queue review
-            </button>
-          </form>
         </div>
       </header>
 
@@ -122,13 +108,13 @@ export default async function JobDetailPage({
                         {review.visaNotes}
                       </p>
                     )}
+                    <ReviewProvenance rawOutput={review.rawOutput} />
                   </article>
                 ))}
               </div>
             ) : (
               <p className="rounded-2xl bg-[var(--soft)] p-5 text-sm leading-6 text-[var(--muted)]">
-                No review yet. Queueing a review creates a structured command;
-                Phase 1 intentionally does not run the reviewer.
+                No AI review was recorded for this job.
               </p>
             )}
           </section>
@@ -233,6 +219,43 @@ export default async function JobDetailPage({
         </aside>
       </div>
     </>
+  );
+}
+
+function ReviewProvenance({ rawOutput }: { rawOutput: unknown }) {
+  if (!rawOutput || typeof rawOutput !== "object") return null;
+  const metadata = rawOutput as {
+    provider?: unknown;
+    model?: unknown;
+    promptVersion?: unknown;
+    evidence?: { summary?: unknown };
+    decision?: { reasons?: unknown };
+  };
+  const provider = typeof metadata.provider === "string" ? metadata.provider : null;
+  const model = typeof metadata.model === "string" ? metadata.model : null;
+  const promptVersion = typeof metadata.promptVersion === "string" ? metadata.promptVersion : null;
+  const summary = typeof metadata.evidence?.summary === "string" ? metadata.evidence.summary : null;
+  const reasons = Array.isArray(metadata.decision?.reasons)
+    ? metadata.decision.reasons.filter((reason): reason is string => typeof reason === "string")
+    : [];
+  if (!provider && !model && !summary && !reasons.length) return null;
+
+  return (
+    <div className="mt-4 border-t border-[var(--line)] pt-4 text-sm leading-6 text-[var(--muted)]">
+      {(provider || model || promptVersion) && (
+        <p>
+          <strong className="text-[var(--ink)]">Reviewer: </strong>
+          {[provider, model, promptVersion].filter(Boolean).join(" · ")}
+        </p>
+      )}
+      {summary && (
+        <p className="mt-2">
+          <strong className="text-[var(--ink)]">Summary: </strong>
+          {summary}
+        </p>
+      )}
+      {reasons.length > 0 && <ReviewList title="Decision reasons" items={reasons} />}
+    </div>
   );
 }
 

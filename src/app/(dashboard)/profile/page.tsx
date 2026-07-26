@@ -67,6 +67,14 @@ export default async function ProfilePage() {
                 placeholder="Senior engineer focused on product systems, platform reliability, and pragmatic automation…"
               />
             </label>
+            <label className="field sm:col-span-2">
+              <span>Skills</span>
+              <input
+                name="skills"
+                defaultValue={profile?.skills.join(", ") ?? ""}
+                placeholder="C#, .NET, SQL Server, Oracle, Azure, React"
+              />
+            </label>
             <label className="field">
               <span>Target titles</span>
               <input
@@ -107,6 +115,31 @@ export default async function ProfilePage() {
                 name="salaryExpectation"
                 defaultValue={profile?.salaryExpectation ?? ""}
                 placeholder="$160,000–$190,000 base, depending on total package"
+              />
+            </label>
+            <label className="field">
+              <span>Preferred employment types</span>
+              <input
+                name="preferredEmploymentTypes"
+                defaultValue={profile?.preferredEmploymentTypes.join(", ") ?? ""}
+                placeholder="W2 contract, Contract-to-hire"
+              />
+            </label>
+            <label className="field">
+              <span>Deal breakers</span>
+              <input
+                name="dealBreakers"
+                defaultValue={profile?.dealBreakers.join(", ") ?? ""}
+                placeholder="C2C only, onsite in California"
+              />
+            </label>
+            <label className="field sm:col-span-2">
+              <span>Matching notes</span>
+              <textarea
+                name="matchingInstructions"
+                rows={3}
+                defaultValue={profile?.matchingInstructions ?? ""}
+                placeholder="Optional context for evaluating roles, such as strongest domains or preferred work style."
               />
             </label>
             <label className="field">

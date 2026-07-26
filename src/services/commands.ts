@@ -45,10 +45,12 @@ export async function listCommands(filters?: {
   status?: Command["status"];
   type?: CommandType;
   limit?: number;
+  requestedBy?: string;
 }) {
   const conditions = [];
   if (filters?.status) conditions.push(eq(commands.status, filters.status));
   if (filters?.type) conditions.push(eq(commands.type, filters.type));
+  if (filters?.requestedBy) conditions.push(eq(commands.requestedBy, filters.requestedBy));
 
   return getDb()
     .select()
@@ -58,12 +60,14 @@ export async function listCommands(filters?: {
     .limit(filters?.limit ?? 50);
 }
 
-export async function getCommandDetail(id: string) {
+export async function getCommandDetail(id: string, requestedBy?: string) {
   const db = getDb();
+  const conditions = [eq(commands.id, id)];
+  if (requestedBy) conditions.push(eq(commands.requestedBy, requestedBy));
   const [command] = await db
     .select()
     .from(commands)
-    .where(eq(commands.id, id))
+    .where(and(...conditions))
     .limit(1);
   if (!command) return null;
 
@@ -73,6 +77,28 @@ export async function getCommandDetail(id: string) {
     .where(eq(commandEvents.commandId, id))
     .orderBy(desc(commandEvents.createdAt));
   return { ...command, events };
+}
+
+export async function getMatchingRunForUser(rootCommandId: string, requestedBy: string) {
+  const db = getDb();
+  const [root] = await db
+    .select()
+    .from(commands)
+    .where(
+      and(
+        eq(commands.id, rootCommandId),
+        eq(commands.requestedBy, requestedBy),
+        eq(commands.type, "find_matching_jobs"),
+      ),
+    )
+    .limit(1);
+  if (!root) return null;
+  const children = await db
+    .select()
+    .from(commands)
+    .where(eq(commands.parentCommandId, root.id))
+    .orderBy(desc(commands.createdAt));
+  return { root, children };
 }
 
 export async function claimCommand(
@@ -226,6 +252,7 @@ export async function cancelCommand(commandId: string, requestedBy: string) {
     .where(
       and(
         eq(commands.id, commandId),
+        eq(commands.requestedBy, requestedBy),
         sql`${commands.status} IN ('pending', 'claimed')`,
       ),
     )

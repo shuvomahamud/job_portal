@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowRight, LoaderCircle } from "lucide-react";
-import { JOB_SOURCES } from "@/lib/constants";
+import { SELECTABLE_JOB_SOURCES } from "@/lib/constants";
 import { humanize } from "@/lib/format";
 
 export function ImportJobForm() {
@@ -84,8 +84,8 @@ export function ImportJobForm() {
         </label>
         <label className="field">
           <span>Source</span>
-          <select name="source" defaultValue="linkedin">
-            {JOB_SOURCES.map((source) => (
+          <select name="source" defaultValue="manual">
+            {SELECTABLE_JOB_SOURCES.map((source) => (
               <option key={source} value={source}>
                 {humanize(source)}
               </option>

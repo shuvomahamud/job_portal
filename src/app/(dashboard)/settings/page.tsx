@@ -109,7 +109,7 @@ export default function SettingsPage() {
               <p className="font-semibold text-[var(--ink)]">Never stored</p>
             </div>
             <p className="mt-4 text-sm leading-6 text-[var(--muted)]">
-              LinkedIn, Indeed, or Dice credentials; browser cookies; Codex auth;
+              job-board credentials; browser cookies; Codex auth;
               VPS SSH keys; and raw shell commands are outside the data model.
             </p>
           </section>
