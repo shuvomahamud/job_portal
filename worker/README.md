@@ -22,7 +22,14 @@ WORKER_COMMAND_TYPES=find_matching_jobs,discover_jobs_browser,import_jobs,run_ru
 WORKER_MAX_CONCURRENCY=1
 JOB_BROWSER_DISCOVERY_ENABLED=true
 JOB_BROWSER_CDP_URL=http://127.0.0.1:9222
+JOB_BROWSER_CDP_MANAGE_PAGES=true
 ```
+
+`JOB_BROWSER_CDP_MANAGE_PAGES=true` is restricted to a loopback CDP endpoint and
+must be used only with the dedicated job-search browser profile. Before each
+command, the worker creates one fresh blank tab and closes stale tabs that could
+otherwise block Playwright. The command's own tab is also closed after failed,
+canceled, and successful runs.
 
 The VPS must not run Ollama or attempt application submission. It must not automate LinkedIn, bypass CAPTCHAs, or save passwords/cookies in the project.
 

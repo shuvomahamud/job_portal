@@ -7,7 +7,9 @@ import {
   humanDelayMs,
   type BrowserDiscoverySource,
 } from "../search/browserDiscovery";
+import { prepareManagedCdpBrowser, type CdpCleanupResult } from "../search/cdpBrowser";
 import { extractJobDetail } from "../search/jobDetailExtraction";
+import { logger } from "../logger";
 import type { HandlerContext, HandlerResult } from "../types";
 
 const sourceLimitsSchema = z
@@ -34,7 +36,7 @@ const payloadSchema = z.object({
 type PlaywrightModule = {
   chromium: {
     launchPersistentContext: (userDataDir: string, options: Record<string, unknown>) => Promise<BrowserContextLike>;
-    connectOverCDP: (endpointURL: string) => Promise<BrowserLike>;
+    connectOverCDP: (endpointURL: string, options?: Record<string, unknown>) => Promise<BrowserLike>;
   };
 };
 
@@ -54,6 +56,7 @@ type PageLike = {
   goto: (url: string, options: Record<string, unknown>) => Promise<unknown>;
   content: () => Promise<string>;
   waitForTimeout: (ms: number) => Promise<void>;
+  close: (options?: { runBeforeUnload?: boolean }) => Promise<void>;
 };
 
 type StopReason = "completed" | "canceled" | "time_limit" | "quota_reached";
@@ -85,19 +88,21 @@ export async function handleDiscoverJobsBrowser(payload: unknown, context: Handl
   const visitedSearches: string[] = [];
   let stopReason: StopReason = "completed";
   let duplicateCount = 0;
-
-  await addCommandEvent(context.command.id, "browser_discovery_started", "Browser discovery started with a 30-minute maximum runtime cap.", {
-    sources,
-    queries: input.queries,
-    locations,
-    maxResults,
-    sourceLimits,
-    maxRuntimeMinutes,
-    delayRangeMs: [minDelayMs, maxDelayMs],
-  });
+  let page: PageLike | null = null;
 
   try {
-    const page = await contextBrowser.newPage();
+    await addCommandEvent(context.command.id, "browser_discovery_started", "Browser discovery started with a 30-minute maximum runtime cap.", {
+      sources,
+      queries: input.queries,
+      locations,
+      maxResults,
+      sourceLimits,
+      maxRuntimeMinutes,
+      delayRangeMs: [minDelayMs, maxDelayMs],
+      cdpCleanup: browserSession.cdpCleanup,
+    });
+
+    page = await contextBrowser.newPage();
     outer: for (const source of sources) {
       for (const query of input.queries) {
         for (const location of locations) {
@@ -192,7 +197,24 @@ export async function handleDiscoverJobsBrowser(payload: unknown, context: Handl
     });
     throw error;
   } finally {
-    await browserSession.close();
+    if (page) {
+      try {
+        await page.close({ runBeforeUnload: false });
+      } catch (error) {
+        logger.warn("Could not close the browser discovery page", {
+          commandId: context.command.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    try {
+      await browserSession.close();
+    } catch (error) {
+      logger.warn("Could not disconnect the browser discovery session", {
+        commandId: context.command.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   await addCommandEvent(context.command.id, "browser_discovery_finished", `Browser discovery finished with reason: ${stopReason}.`, {
@@ -234,19 +256,64 @@ async function openBrowserSession(playwright: PlaywrightModule, cfg: ReturnType<
   };
 
   if (cfg.JOB_BROWSER_CDP_URL) {
-    const browser = await playwright.chromium.connectOverCDP(cfg.JOB_BROWSER_CDP_URL);
-    const context = browser.contexts()[0] ?? (await browser.newContext(options));
-    return {
-      context,
-      close: async () => {
-        if (browser.disconnect) await browser.disconnect();
-        else await browser.close();
-      },
-    };
+    let lastError: unknown;
+    const maxAttempts = cfg.JOB_BROWSER_CDP_MANAGE_PAGES ? 2 : 1;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      let cdpCleanup: CdpCleanupResult | null = null;
+      let browser: BrowserLike | null = null;
+      try {
+        if (cfg.JOB_BROWSER_CDP_MANAGE_PAGES) {
+          cdpCleanup = await prepareManagedCdpBrowser(cfg.JOB_BROWSER_CDP_URL, {
+            requestTimeoutMs: cfg.JOB_BROWSER_CDP_CLEANUP_TIMEOUT_MS,
+            settleTimeoutMs: cfg.JOB_BROWSER_CDP_CLEANUP_TIMEOUT_MS,
+          });
+          logger.info("Prepared dedicated Chrome CDP browser", {
+            attempt,
+            closedPageCount: cdpCleanup.closedTargetIds.length,
+          });
+        }
+
+        const connectedBrowser = await playwright.chromium.connectOverCDP(cfg.JOB_BROWSER_CDP_URL, {
+          timeout: cfg.JOB_BROWSER_CDP_CONNECT_TIMEOUT_MS,
+        });
+        browser = connectedBrowser;
+        const context = connectedBrowser.contexts()[0] ?? (await connectedBrowser.newContext(options));
+        return {
+          context,
+          cdpCleanup: cdpCleanup
+            ? { closedPageCount: cdpCleanup.closedTargetIds.length }
+            : null,
+          close: async () => {
+            if (connectedBrowser.disconnect) await connectedBrowser.disconnect();
+            else await connectedBrowser.close();
+          },
+        };
+      } catch (error) {
+        lastError = error;
+        if (browser) {
+          try {
+            if (browser.disconnect) await browser.disconnect();
+            else await browser.close();
+          } catch {
+            // The connection already failed; the retry below performs a fresh cleanup.
+          }
+        }
+        logger.warn("Could not connect to Chrome CDP browser", {
+          attempt,
+          maxAttempts,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    throw new Error(
+      `Could not connect to Chrome CDP browser after ${maxAttempts} attempt(s): ${
+        lastError instanceof Error ? lastError.message : String(lastError)
+      }`,
+    );
   }
 
   const context = await playwright.chromium.launchPersistentContext(cfg.JOB_BROWSER_USER_DATA_DIR, options);
-  return { context, close: () => context.close() };
+  return { context, cdpCleanup: null, close: () => context.close() };
 }
 
 function normalizeSourceLimits(

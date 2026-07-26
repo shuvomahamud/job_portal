@@ -297,8 +297,8 @@ export async function persistMatchReviewAndDecision(input: {
   metadata: MatchReviewMetadata;
 }) {
   const database = getWorkerDb();
-  return database.transaction(async (tx) => {
-    const [review] = await tx
+  const [reviewRows, jobRows] = await database.batch([
+    database
       .insert(schema.jobReviews)
       .values({
         jobId: input.job.id,
@@ -311,14 +311,14 @@ export async function persistMatchReviewAndDecision(input: {
         resumeAngle: input.metadata.evidence.resumeAngle,
         rawOutput: input.metadata,
       })
-      .returning();
-    const [job] = await tx
+      .returning(),
+    database
       .update(schema.jobs)
       .set(matchDecisionValues(input.metadata.evidence, input.metadata.decision))
       .where(eq(schema.jobs.id, input.job.id))
-      .returning();
-    return { review, job };
-  });
+      .returning(),
+  ]);
+  return { review: reviewRows[0], job: jobRows[0] };
 }
 
 function matchDecisionValues(evidence: JobMatchEvidence, decision: JobMatchDecision) {
@@ -352,8 +352,8 @@ export async function archiveJobFromHardFilter(input: {
   visaSignal: string;
 }) {
   const database = getWorkerDb();
-  return database.transaction(async (tx) => {
-    const [review] = await tx
+  const [reviewRows, jobRows] = await database.batch([
+    database
       .insert(schema.jobReviews)
       .values({
         jobId: input.job.id,
@@ -366,8 +366,8 @@ export async function archiveJobFromHardFilter(input: {
         resumeAngle: "Do not tailor a resume for a hard-conflict posting.",
         rawOutput: { ruleset: "profile-hard-filter-v1", reasons: input.reasons, visaSignal: input.visaSignal },
       })
-      .returning();
-    const [job] = await tx
+      .returning(),
+    database
       .update(schema.jobs)
       .set({
         status: "archived",
@@ -378,7 +378,7 @@ export async function archiveJobFromHardFilter(input: {
         updatedAt: new Date(),
       })
       .where(eq(schema.jobs.id, input.job.id))
-      .returning();
-    return { review, job };
-  });
+      .returning(),
+  ]);
+  return { review: reviewRows[0], job: jobRows[0] };
 }
