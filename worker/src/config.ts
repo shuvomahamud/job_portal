@@ -32,6 +32,7 @@ const envSchema = z.object({
   JOB_BROWSER_NAVIGATION_TIMEOUT_MS: intFromEnv(60000, 10000, 180000),
   JOB_BROWSER_MAX_RESULTS_PER_COMMAND: intFromEnv(25, 1, 100),
   JOB_BROWSER_MAX_PAGES_PER_SEARCH: intFromEnv(1, 1, 5),
+  JOB_BROWSER_CDP_URL: z.string().url().optional(),
   CODEX_ENABLED: z.coerce.boolean().default(false),
 });
 

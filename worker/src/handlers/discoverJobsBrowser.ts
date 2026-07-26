@@ -34,7 +34,15 @@ const payloadSchema = z.object({
 type PlaywrightModule = {
   chromium: {
     launchPersistentContext: (userDataDir: string, options: Record<string, unknown>) => Promise<BrowserContextLike>;
+    connectOverCDP: (endpointURL: string) => Promise<BrowserLike>;
   };
+};
+
+type BrowserLike = {
+  contexts: () => BrowserContextLike[];
+  newContext: (options: Record<string, unknown>) => Promise<BrowserContextLike>;
+  disconnect?: () => Promise<void> | void;
+  close: () => Promise<void>;
 };
 
 type BrowserContextLike = {
@@ -69,12 +77,8 @@ export async function handleDiscoverJobsBrowser(payload: unknown, context: Handl
   const foundBySource = Object.fromEntries(sources.map((source) => [source, 0])) as Record<BrowserDiscoverySource, number>;
 
   const playwright = await loadPlaywright();
-  const contextBrowser = await playwright.chromium.launchPersistentContext(cfg.JOB_BROWSER_USER_DATA_DIR, {
-    headless: cfg.JOB_BROWSER_HEADLESS,
-    slowMo: cfg.JOB_BROWSER_SLOW_MO_MS,
-    viewport: { width: 1365, height: 900 },
-    locale: "en-US",
-  });
+  const browserSession = await openBrowserSession(playwright, cfg);
+  const contextBrowser = browserSession.context;
 
   const discovered = new Set<string>();
   const upsertedIds: string[] = [];
@@ -152,7 +156,7 @@ export async function handleDiscoverJobsBrowser(payload: unknown, context: Handl
     });
     throw error;
   } finally {
-    await contextBrowser.close();
+    await browserSession.close();
   }
 
   await addCommandEvent(context.command.id, "browser_discovery_finished", `Browser discovery finished with reason: ${stopReason}.`, {
@@ -181,6 +185,30 @@ export async function handleDiscoverJobsBrowser(payload: unknown, context: Handl
     delayRangeMs: [minDelayMs, maxDelayMs],
     jobIds: upsertedIds,
   };
+}
+
+async function openBrowserSession(playwright: PlaywrightModule, cfg: ReturnType<typeof getConfig>) {
+  const options = {
+    headless: cfg.JOB_BROWSER_HEADLESS,
+    slowMo: cfg.JOB_BROWSER_SLOW_MO_MS,
+    viewport: { width: 1365, height: 900 },
+    locale: "en-US",
+  };
+
+  if (cfg.JOB_BROWSER_CDP_URL) {
+    const browser = await playwright.chromium.connectOverCDP(cfg.JOB_BROWSER_CDP_URL);
+    const context = browser.contexts()[0] ?? (await browser.newContext(options));
+    return {
+      context,
+      close: async () => {
+        if (browser.disconnect) await browser.disconnect();
+        else await browser.close();
+      },
+    };
+  }
+
+  const context = await playwright.chromium.launchPersistentContext(cfg.JOB_BROWSER_USER_DATA_DIR, options);
+  return { context, close: () => context.close() };
 }
 
 function normalizeSourceLimits(
