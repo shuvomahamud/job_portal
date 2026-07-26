@@ -1,7 +1,8 @@
-# Job Portal Workers
+# Job Portal Worker
 
-The matching workflow uses two instances of the same TypeScript worker package.
-The database command queue connects them; neither machine needs an inbound public API.
+The preferred topology uses one always-on TypeScript queue worker on the VPS.
+It performs discovery itself and calls Ollama on the Mac over Tailscale for
+inference. The Mac does not run a second queue consumer.
 
 ## VPS discovery worker
 
@@ -12,17 +13,20 @@ Responsibilities:
 - extracts individual posting details at human speed;
 - stages valid jobs as `reviewing`;
 - archives deterministic hard conflicts;
-- queues Mac local-AI matching.
+- claims local-AI matching commands and calls the Mac Ollama endpoint.
 
 Example VPS env values:
 
 ```env
 WORKER_ID=job-discovery-vps-01
-WORKER_COMMAND_TYPES=find_matching_jobs,discover_jobs_browser,import_jobs,run_rule_filter
+WORKER_COMMAND_TYPES=find_matching_jobs,discover_jobs_browser,import_jobs,run_rule_filter,run_local_llm_extraction
 WORKER_MAX_CONCURRENCY=1
 JOB_BROWSER_DISCOVERY_ENABLED=true
 JOB_BROWSER_CDP_URL=http://127.0.0.1:9222
 JOB_BROWSER_CDP_MANAGE_PAGES=true
+OLLAMA_BASE_URL=http://100.121.70.118:11434
+OLLAMA_ALLOWED_REMOTE_HOSTS=100.121.70.118
+OLLAMA_MODEL=qwen3.5:9b
 ```
 
 `JOB_BROWSER_CDP_MANAGE_PAGES=true` is restricted to a loopback CDP endpoint and
@@ -31,31 +35,22 @@ command, the worker creates one fresh blank tab and closes stale tabs that could
 otherwise block Playwright. The command's own tab is also closed after failed,
 canceled, and successful runs.
 
+The remote Ollama host must be explicitly listed in
+`OLLAMA_ALLOWED_REMOTE_HOSTS`; loopback remains allowed automatically. Prefer a
+Tailscale IP or MagicDNS name and do not expose Ollama publicly.
+
 The VPS must not run Ollama or attempt application submission. It must not automate LinkedIn, bypass CAPTCHAs, or save passwords/cookies in the project.
 
-## Mac AI worker
+## Mac Ollama provider
 
 Responsibilities:
 
-- claims `run_local_llm_extraction` only;
-- calls loopback Ollama `qwen3.5:9b` for every viable staged job;
-- validates structured evidence;
-- applies deterministic match policy;
-- optionally calls the remote reviewer only for uncertain jobs.
+- runs Ollama `qwen3.5:9b`;
+- accepts requests only through the private Tailscale path;
+- does not claim commands or connect to the database.
 
-Example Mac env values:
-
-```env
-WORKER_ID=job-ai-mac-01
-WORKER_COMMAND_TYPES=run_local_llm_extraction
-WORKER_MAX_CONCURRENCY=1
-AI_MATCH_PROVIDER=ollama
-OLLAMA_BASE_URL=http://127.0.0.1:11434
-OLLAMA_MODEL=qwen3.5:9b
-REMOTE_AI_REVIEW_ENABLED=false
-```
-
-Keep Ollama bound to loopback. Do not place `OPENAI_API_KEY`, the Neon URL, browser cookies, or SSH keys in Git.
+Do not expose Ollama publicly. Do not place `OPENAI_API_KEY`, the Neon URL,
+browser cookies, or SSH keys in Git.
 
 ## Checks
 

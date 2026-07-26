@@ -45,6 +45,7 @@ const envSchema = z.object({
   JOB_BROWSER_CDP_CLEANUP_TIMEOUT_MS: intFromEnv(10000, 1000, 60000),
   AI_MATCH_PROVIDER: z.literal("ollama").default("ollama"),
   OLLAMA_BASE_URL: z.string().url().default("http://127.0.0.1:11434"),
+  OLLAMA_ALLOWED_REMOTE_HOSTS: z.string().default(""),
   OLLAMA_MODEL: z.string().trim().min(1).max(100).default("qwen3.5:9b"),
   OLLAMA_REQUEST_TIMEOUT_MS: intFromEnv(90000, 1000, 180000),
   OLLAMA_KEEP_ALIVE: z.string().trim().min(1).max(30).default("30m"),
@@ -59,7 +60,10 @@ const envSchema = z.object({
   REMOTE_AI_REVIEW_MAX_PER_RUN: intFromEnv(5, 0, 50),
 });
 
-export type WorkerConfig = z.infer<typeof envSchema> & { workerCommandTypes: string[] };
+export type WorkerConfig = z.infer<typeof envSchema> & {
+  workerCommandTypes: string[];
+  ollamaAllowedRemoteHosts: string[];
+};
 
 let cachedConfig: WorkerConfig | null = null;
 
@@ -70,6 +74,7 @@ export function getConfig(): WorkerConfig {
     ...parsed,
     DASHBOARD_BASE_URL: parsed.DASHBOARD_BASE_URL.replace(/\/$/, ""),
     workerCommandTypes: parsed.WORKER_COMMAND_TYPES.split(",").map((item) => item.trim()).filter(Boolean),
+    ollamaAllowedRemoteHosts: parsed.OLLAMA_ALLOWED_REMOTE_HOSTS.split(",").map((item) => item.trim()).filter(Boolean),
   };
   return cachedConfig;
 }

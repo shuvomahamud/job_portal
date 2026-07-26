@@ -8,6 +8,7 @@ if (process.env.RUN_OLLAMA_SMOKE !== "true") {
 async function main() {
   const provider = new OllamaJobMatchProvider({
     baseUrl: process.env.OLLAMA_BASE_URL ?? "http://127.0.0.1:11434",
+    allowedRemoteHosts: (process.env.OLLAMA_ALLOWED_REMOTE_HOSTS ?? "").split(",").map((host) => host.trim()).filter(Boolean),
     model: process.env.OLLAMA_MODEL ?? "qwen3.5:9b",
     requestTimeoutMs: Number(process.env.OLLAMA_REQUEST_TIMEOUT_MS ?? 90_000),
     keepAlive: process.env.OLLAMA_KEEP_ALIVE ?? "30m",

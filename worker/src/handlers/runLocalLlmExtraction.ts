@@ -109,6 +109,7 @@ export async function handleRunLocalLlmExtraction(payload: unknown, context: Han
 
   const localProvider = new OllamaJobMatchProvider({
     baseUrl: cfg.OLLAMA_BASE_URL,
+    allowedRemoteHosts: cfg.ollamaAllowedRemoteHosts,
     model: input.model ?? cfg.OLLAMA_MODEL,
     requestTimeoutMs: cfg.OLLAMA_REQUEST_TIMEOUT_MS,
     keepAlive: cfg.OLLAMA_KEEP_ALIVE,
@@ -133,7 +134,7 @@ export async function handleRunLocalLlmExtraction(payload: unknown, context: Han
   let evaluatedCount = 0;
   let remoteReviewCount = 0;
 
-  await addCommandEvent(context.command.id, "local_matching_started", "Mac local AI worker started structured profile matching.", {
+  await addCommandEvent(context.command.id, "local_matching_started", "AI worker started structured profile matching with Ollama.", {
     parentCommandId: input.parentCommandId,
     model: localProvider.model,
     jobCount: input.jobIds.length,

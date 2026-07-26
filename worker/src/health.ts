@@ -11,6 +11,7 @@ async function main() {
   if (commandTypes.includes("run_local_llm_extraction")) {
     await verifyOllamaHealth({
       baseUrl: cfg.OLLAMA_BASE_URL,
+      allowedRemoteHosts: cfg.ollamaAllowedRemoteHosts,
       model: cfg.OLLAMA_MODEL,
       requestTimeoutMs: cfg.OLLAMA_REQUEST_TIMEOUT_MS,
       keepAlive: cfg.OLLAMA_KEEP_ALIVE,

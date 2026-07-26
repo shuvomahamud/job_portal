@@ -3,6 +3,7 @@ import { buildJobMatchUserPrompt, jobMatchSystemPrompt } from "./prompt";
 
 type OllamaConfig = {
   baseUrl: string;
+  allowedRemoteHosts?: string[];
   model: string;
   requestTimeoutMs: number;
   keepAlive: string;
@@ -13,11 +14,20 @@ type OllamaResponse = {
   error?: string;
 };
 
-function validateOllamaBaseUrl(baseUrl: string) {
+export function validateOllamaBaseUrl(baseUrl: string, allowedRemoteHosts: string[] = []) {
   const url = new URL(baseUrl);
   const localHosts = new Set(["127.0.0.1", "localhost", "::1"]);
-  if (!localHosts.has(url.hostname)) {
-    throw new Error("OLLAMA_BASE_URL must point to a loopback address.");
+  const allowedHosts = new Set(allowedRemoteHosts.map((host) => host.trim().toLowerCase()).filter(Boolean));
+  if (!["http:", "https:"].includes(url.protocol)) {
+    throw new Error("OLLAMA_BASE_URL must use HTTP or HTTPS.");
+  }
+  if (url.username || url.password) {
+    throw new Error("OLLAMA_BASE_URL must not contain embedded credentials.");
+  }
+  if (!localHosts.has(url.hostname) && !allowedHosts.has(url.hostname.toLowerCase())) {
+    throw new Error(
+      `OLLAMA_BASE_URL host ${url.hostname} is not loopback or listed in OLLAMA_ALLOWED_REMOTE_HOSTS.`,
+    );
   }
   return url.toString().replace(/\/$/, "");
 }
@@ -28,7 +38,7 @@ export class OllamaJobMatchProvider implements JobMatchProvider {
   private readonly baseUrl: string;
 
   constructor(private readonly config: OllamaConfig) {
-    this.baseUrl = validateOllamaBaseUrl(config.baseUrl);
+    this.baseUrl = validateOllamaBaseUrl(config.baseUrl, config.allowedRemoteHosts);
     this.model = config.model;
   }
 
@@ -65,7 +75,7 @@ export class OllamaJobMatchProvider implements JobMatchProvider {
 }
 
 export async function verifyOllamaHealth(config: OllamaConfig) {
-  const baseUrl = validateOllamaBaseUrl(config.baseUrl);
+  const baseUrl = validateOllamaBaseUrl(config.baseUrl, config.allowedRemoteHosts);
   const response = await fetch(`${baseUrl}/api/tags`, { signal: AbortSignal.timeout(Math.min(config.requestTimeoutMs, 10_000)) });
   if (!response.ok) throw new Error(`Ollama health check failed (${response.status}).`);
   const body = (await response.json()) as { models?: Array<{ name?: string }> };
