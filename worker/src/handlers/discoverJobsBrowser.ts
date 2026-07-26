@@ -3,11 +3,11 @@ import { getConfig, sleep } from "../config";
 import { addCommandEvent, getCommandStatus, upsertJobs } from "../db";
 import {
   buildBrowserSearchUrl,
-  buildDiscoveredJobRecords,
   extractJobUrlsFromHtml,
   humanDelayMs,
   type BrowserDiscoverySource,
 } from "../search/browserDiscovery";
+import { extractJobDetail } from "../search/jobDetailExtraction";
 import type { HandlerContext, HandlerResult } from "../types";
 
 const sourceLimitsSchema = z
@@ -19,7 +19,7 @@ const sourceLimitsSchema = z
   .strict();
 
 const payloadSchema = z.object({
-  sources: z.array(z.enum(["linkedin", "indeed", "dice"])).min(1).max(3).default(["linkedin", "indeed", "dice"]).optional(),
+  sources: z.array(z.enum(["linkedin", "indeed", "dice"])).min(1).max(3).default(["indeed", "dice"]).optional(),
   queries: z.array(z.string().trim().min(1).max(200)).min(1).max(10),
   locations: z.array(z.string().trim().min(1).max(200)).min(1).max(10).default(["Remote"]).optional(),
   maxResults: z.number().int().min(1).max(100).optional(),
@@ -65,7 +65,7 @@ export async function handleDiscoverJobsBrowser(payload: unknown, context: Handl
   }
 
   const input = payloadSchema.parse(payload);
-  const sources = input.sources ?? ["linkedin", "indeed", "dice"];
+  const sources = input.sources ?? ["indeed", "dice"];
   const locations = input.locations ?? ["Remote"];
   const maxResults = Math.min(input.maxResults ?? cfg.JOB_BROWSER_MAX_RESULTS_PER_COMMAND, cfg.JOB_BROWSER_MAX_RESULTS_PER_COMMAND);
   const maxPagesPerSearch = Math.min(input.maxPagesPerSearch ?? cfg.JOB_BROWSER_MAX_PAGES_PER_SEARCH, cfg.JOB_BROWSER_MAX_PAGES_PER_SEARCH);
@@ -129,16 +129,47 @@ export async function handleDiscoverJobsBrowser(payload: unknown, context: Handl
           for (const url of urls) discovered.add(url);
           foundBySource[source] += urls.length;
 
-          const jobs = buildDiscoveredJobRecords(source, urls, { query, location });
-          const upserted = input.dryRun ? [] : await upsertJobs(jobs);
-          upsertedIds.push(...upserted.map((job) => job.id));
+          let savedThisSearch = 0;
+          for (const url of urls) {
+            const detailStop = await shouldStop(context.command.id, deadlineAt, discovered.size, maxResults, source, foundBySource, sourceLimits);
+            if (detailStop && detailStop !== "quota_reached") {
+              stopReason = detailStop;
+              break outer;
+            }
 
-          await addCommandEvent(context.command.id, "browser_discovery_checkpoint", `Checkpoint saved ${upserted.length} ${source} job link(s).`, {
+            let detailHtml = "";
+            let extractionFailed = false;
+            try {
+              await page.waitForTimeout(humanDelayMs({ minDelayMs, maxDelayMs }));
+              await page.goto(url, { waitUntil: "domcontentloaded", timeout: cfg.JOB_BROWSER_NAVIGATION_TIMEOUT_MS });
+              await page.waitForTimeout(Math.min(humanDelayMs({ minDelayMs, maxDelayMs }), 20000));
+              detailHtml = await page.content();
+            } catch (error) {
+              extractionFailed = true;
+              await addCommandEvent(context.command.id, "browser_discovery_detail_failed", "Job detail enrichment failed; saving source URL with fallback metadata.", {
+                source,
+                query,
+                location,
+                url,
+                error: error instanceof Error ? error.message : String(error),
+              });
+            }
+
+            const job = extractJobDetail(source, url, detailHtml, { query, location });
+            if (extractionFailed) {
+              job.notes = `${job.notes ?? ""} Detail page navigation failed; source URL preserved for manual review.`.trim();
+            }
+            const upserted = input.dryRun ? [] : await upsertJobs([job]);
+            upsertedIds.push(...upserted.map((savedJob) => savedJob.id));
+            savedThisSearch += upserted.length;
+          }
+
+          await addCommandEvent(context.command.id, "browser_discovery_checkpoint", `Checkpoint saved ${savedThisSearch} ${source} enriched job link(s).`, {
             source,
             query,
             location,
             discoveredThisSearch: urls.length,
-            savedThisSearch: upserted.length,
+            savedThisSearch,
             totalDiscovered: discovered.size,
             totalSaved: upsertedIds.length,
             foundBySource,

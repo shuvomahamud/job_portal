@@ -82,7 +82,9 @@ The worker creates lightweight searchable records with source URLs, such as Link
 
 ### `discover_jobs_browser`
 
-This is Phase 2B. It uses a **local logged-in browser profile** at human-like speed to search LinkedIn, Indeed, and Dice and collect individual job URLs.
+This is Phase 2B. It uses a **local logged-in browser profile** at human-like speed to search LinkedIn, Indeed, and Dice, collect individual job URLs, then enrich each found link by opening the job detail page one at a time.
+
+The enrichment step keeps the exact source/apply URL, extracts title/company/location/description where possible, detects obvious employment/remote/salary/visa hints, and still saves the URL with fallback metadata if extraction fails.
 
 It is disabled by default. Enable only on the machine where you are logged in through the browser:
 
@@ -122,6 +124,7 @@ Safety boundaries:
 - worker never stores platform passwords;
 - worker does not click Apply or Submit;
 - worker does not bypass CAPTCHA/security checks;
+- worker uses one browser page/tab and reuses it for detail enrichment;
 - worker waits 15–45 seconds between page actions by default;
 - worker keeps page/result limits small.
 
@@ -169,6 +172,12 @@ The rule filter updates each job with:
 - detected tech stack
 - salary/employment/remote hints where obvious
 - a `rule_engine` row in `job_reviews`
+
+Apply gate:
+
+- `ready_to_apply` requires strong target-stack fit **and** an explicit or likely H-1B/contract path such as H-1B transfer, sponsorship available, W2 contract, C2H, C2C/corp-to-corp, or staffing/vendor contract signals.
+- Full-time jobs with unknown sponsorship are kept as `needs_review` rather than auto-ready, even when the .NET fit is strong.
+- `no sponsorship`, GC/USC-only, citizen-only, and clearance-required postings are archived/skipped even when the stack matches.
 
 It is deterministic and lightweight: no browser, no Codex, no LLM.
 

@@ -40,6 +40,14 @@ test("normalizeJobUrl supports Indeed and Dice job patterns", () => {
     "https://www.indeed.com/viewjob?jk=abc123",
   );
   assert.equal(
+    normalizeJobUrl(
+      "indeed",
+      "/rc/clk?jk=abc123&amp;cmp=Acme+Corp&amp;ti=.NET+Developer&amp;vjk=tracking",
+      "https://www.indeed.com/jobs?q=.net",
+    ),
+    "https://www.indeed.com/rc/clk?jk=abc123&cmp=Acme+Corp&ti=.NET+Developer",
+  );
+  assert.equal(
     normalizeJobUrl("dice", "https://www.dice.com/job-detail/abc?utm_campaign=x", "https://www.dice.com/jobs"),
     "https://www.dice.com/job-detail/abc",
   );
@@ -59,4 +67,16 @@ test("buildDiscoveredJobRecords marks browser discovery jobs safely", () => {
   assert.equal(job.status, "new");
   assert.deepEqual(job.techStack, [".NET", "C#", "SQL"]);
   assert.match(job.notes ?? "", /no apply\/submit automation/i);
+});
+
+test("buildDiscoveredJobRecords uses Indeed URL metadata when available", () => {
+  const [job] = buildDiscoveredJobRecords(
+    "indeed",
+    ["https://www.indeed.com/rc/clk?jk=abc123&cmp=Acme+Corp&ti=Senior+.NET+Developer"],
+    { query: ".NET Application Support", location: "Remote" },
+  );
+
+  assert.equal(job.title, "Senior .NET Developer");
+  assert.equal(job.company, "Acme Corp");
+  assert.equal(job.sourceUrl, "https://www.indeed.com/rc/clk?jk=abc123&cmp=Acme+Corp&ti=Senior+.NET+Developer");
 });

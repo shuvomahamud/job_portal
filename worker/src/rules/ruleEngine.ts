@@ -32,13 +32,16 @@ const positiveRules: RulePattern[] = [
   { label: "full stack", patterns: [/full[- ]?stack/i, /backend.*frontend/i], score: 8 },
   { label: "Azure", patterns: [/\bazure\b/i, /app service/i], score: 8, tech: "Azure" },
   { label: "React/Angular", patterns: [/\breact\b/i, /\bangular\b/i], score: 6 },
-  { label: "contract fit", patterns: [/contract/i, /contract-to-hire/i, /c2h/i], score: 5 },
+  { label: "contract fit", patterns: [/contract/i, /contract-to-hire/i, /c2h/i, /w2 contract/i, /corp-to-corp/i, /c2c/i], score: 8 },
+  { label: "staffing/vendor likely", patterns: [/staffing/i, /recruiter/i, /consulting/i, /implementation partner/i, /vendor/i, /talent solutions/i], score: 7 },
   { label: "remote/hybrid", patterns: [/\bremote\b/i, /\bhybrid\b/i], score: 5 },
 ];
 
 const negativeRules: RulePattern[] = [
-  { label: "citizen only", patterns: [/u\.?s\.? citizens? only/i, /citizenship required/i, /must be a us citizen/i], score: -45 },
-  { label: "clearance required", patterns: [/security clearance/i, /active clearance/i, /secret clearance/i, /top secret/i], score: -35 },
+  { label: "citizen only", patterns: [/u\.?s\.? citizens? only/i, /citizenship required/i, /must be a us citizen/i], score: -55 },
+  { label: "GC/USC only", patterns: [/\b(gc|green card)\s*(\/|or)?\s*(usc|u\.?s\.? citizen)/i, /usc\s*(\/|or)?\s*gc/i], score: -55 },
+  { label: "clearance required", patterns: [/security clearance/i, /active clearance/i, /secret clearance/i, /top secret/i], score: -45 },
+  { label: "no sponsorship", patterns: [/no sponsorship/i, /unable to sponsor/i, /cannot sponsor/i, /without sponsorship/i, /will not sponsor/i], score: -50 },
   { label: "unrelated Java-only", patterns: [/java developer/i, /spring boot/i], score: -18 },
   { label: "unrelated Python-only", patterns: [/python developer/i, /django/i, /flask/i], score: -14 },
   { label: "architect-heavy", patterns: [/principal architect/i, /enterprise architect/i, /solutions architect/i], score: -16 },
@@ -74,18 +77,30 @@ function unique(items: string[]) {
 
 function detectVisaSignal(text: string): { signal: string; notes: string; penalty: number } {
   if (/u\.?s\.? citizens? only|citizenship required|must be a us citizen/i.test(text)) {
-    return { signal: "citizen_only", notes: "Job appears to require U.S. citizenship.", penalty: 45 };
+    return { signal: "citizen_only", notes: "Job appears to require U.S. citizenship; skip for H-1B transfer search.", penalty: 55 };
+  }
+  if (/\b(gc|green card)\s*(\/|or)?\s*(usc|u\.?s\.? citizen)|usc\s*(\/|or)?\s*gc/i.test(text)) {
+    return { signal: "gc_usc_only", notes: "Job appears limited to GC/USC candidates; skip for H-1B transfer search.", penalty: 55 };
   }
   if (/security clearance|active clearance|secret clearance|top secret/i.test(text)) {
-    return { signal: "clearance_required", notes: "Job appears to require security clearance.", penalty: 30 };
+    return { signal: "clearance_required", notes: "Job appears to require security clearance; skip unless manually confirmed otherwise.", penalty: 45 };
   }
-  if (/no sponsorship|unable to sponsor|cannot sponsor|without sponsorship/i.test(text)) {
-    return { signal: "no_sponsorship", notes: "Job says sponsorship is not available.", penalty: 25 };
+  if (/no sponsorship|no visa sponsorship|visa sponsorship is not available|sponsorship is not available|do not provide visa sponsorship|unable to sponsor|cannot sponsor|without sponsorship|will not sponsor|requiring visa sponsorship will not be considered/i.test(text)) {
+    return { signal: "no_sponsorship", notes: "Job says sponsorship is not available; skip for H-1B transfer search.", penalty: 50 };
   }
-  if (/sponsorship.*available|visa sponsorship|h-?1b/i.test(text)) {
-    return { signal: "sponsorship_mentioned", notes: "Sponsorship or visa language is mentioned; review manually.", penalty: 5 };
+  if (/h-?1b transfer/i.test(text)) {
+    return { signal: "h1b_transfer_explicit", notes: "H-1B transfer is explicitly mentioned.", penalty: 0 };
   }
-  return { signal: "unknown", notes: "No clear visa/sponsorship signal found.", penalty: 0 };
+  if (/sponsorship.*available|visa sponsorship|will sponsor|sponsor.*visa/i.test(text)) {
+    return { signal: "sponsorship_available", notes: "Sponsorship or visa support appears available; still verify before applying.", penalty: 0 };
+  }
+  if (/\b(contract|contract-to-hire|c2h|c2c|corp-to-corp|w2)\b/i.test(text) && /staffing|recruiter|consulting|vendor|talent solutions|implementation partner/i.test(text)) {
+    return { signal: "contract_vendor_likely", notes: "Contract/vendor/staffing signals make this likely worth review for H-1B/contract fit.", penalty: 0 };
+  }
+  if (/\b(contract|contract-to-hire|c2h|c2c|corp-to-corp|w2)\b/i.test(text)) {
+    return { signal: "contract_likely", notes: "Contract language is present; verify work-authorization details before applying.", penalty: 0 };
+  }
+  return { signal: "unknown", notes: "No clear visa/sponsorship signal found; do not auto-apply without manual review unless other evidence is strong.", penalty: 0 };
 }
 
 function detectRemoteType(text: string, existing?: string | null) {
@@ -151,10 +166,32 @@ export function evaluateJob(job: NormalizedJobInput & { id?: string }): RuleFilt
   const visa = detectVisaSignal(text);
   score -= visa.penalty;
 
+  const hasTargetStack = techStack.some((tech) => [".NET", "C#", "SQL", "Oracle", "Production Support"].includes(tech));
+  const hasSupportOrDotnet = techStack.some((tech) => [".NET", "C#", "Production Support"].includes(tech)) || /application support|production support|\.net|asp\.net|c#/i.test(text);
+  const disqualifyingVisa = ["citizen_only", "gc_usc_only", "clearance_required", "no_sponsorship"].includes(visa.signal);
+  const contractFriendly = ["h1b_transfer_explicit", "sponsorship_available", "contract_vendor_likely", "contract_likely"].includes(visa.signal);
+  const fullTimeUnknown = detectEmploymentType(text, job.employmentType) === "full-time" && visa.signal === "unknown";
+
+  if (contractFriendly && hasSupportOrDotnet) {
+    score += visa.signal === "contract_likely" ? 4 : 8;
+    strengths.push("H-1B/contract path looks possible");
+  }
+  if (fullTimeUnknown) {
+    score -= 10;
+    gaps.push("Full-time role with unknown sponsorship; manual review required before applying.");
+  }
+  if (disqualifyingVisa) {
+    gaps.push("Work-authorization disqualifier for H-1B transfer search.");
+  }
+
   score = Math.max(0, Math.min(100, Math.round(score)));
-  const recommendation: RuleFilterDecision = score >= 72 ? "apply" : score >= 50 ? "maybe" : "skip";
+  let recommendation: RuleFilterDecision = score >= 72 ? "apply" : score >= 50 ? "maybe" : "skip";
+  if (disqualifyingVisa || !hasTargetStack) recommendation = "skip";
+  else if (score >= 72 && !contractFriendly) recommendation = "maybe";
+  else if (fullTimeUnknown) recommendation = "maybe";
+
   const status = recommendation === "apply" ? "ready_to_apply" : recommendation === "maybe" ? "needs_review" : "archived";
-  const priority: Priority = score >= 82 ? "high" : score >= 60 ? "normal" : "low";
+  const priority: Priority = recommendation === "apply" && score >= 82 ? "high" : score >= 60 ? "normal" : "low";
 
   return {
     score,
@@ -170,7 +207,7 @@ export function evaluateJob(job: NormalizedJobInput & { id?: string }): RuleFilt
     employmentType: detectEmploymentType(text, job.employmentType),
     salaryText: detectSalary(text, job.salaryText),
     resumeAngle: buildResumeAngle(techStack, recommendation),
-    notes: `Rule filter: ${recommendation}; score ${score}. Positives: ${unique(matchedPositiveRules).join(", ") || "none"}. Concerns: ${unique(matchedNegativeRules).join(", ") || "none"}.`,
+    notes: `Rule filter: ${recommendation}; score ${score}. H-1B/contract signal: ${visa.signal}. ${visa.notes} Positives: ${unique(matchedPositiveRules).join(", ") || "none"}. Concerns: ${unique(matchedNegativeRules).join(", ") || "none"}.`,
     matchedPositiveRules: unique(matchedPositiveRules),
     matchedNegativeRules: unique(matchedNegativeRules),
   };

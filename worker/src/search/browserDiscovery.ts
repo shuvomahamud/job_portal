@@ -54,7 +54,7 @@ export function extractJobUrlsFromHtml(source: BrowserDiscoverySource, html: str
 
 export function normalizeJobUrl(source: BrowserDiscoverySource, rawHref: string, currentUrl: string) {
   try {
-    const url = new URL(rawHref, currentUrl);
+    const url = new URL(decodeHtmlAttribute(rawHref), currentUrl);
     if (!sourceHosts[source].some((host) => url.hostname === host || url.hostname.endsWith(`.${host}`))) return null;
     if (!looksLikeJobUrl(source, url)) return null;
     stripTracking(url);
@@ -62,6 +62,15 @@ export function normalizeJobUrl(source: BrowserDiscoverySource, rawHref: string,
   } catch {
     return null;
   }
+}
+
+function decodeHtmlAttribute(value: string) {
+  return value
+    .replace(/&amp;/gi, "&")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">");
 }
 
 function looksLikeJobUrl(source: BrowserDiscoverySource, url: URL) {
@@ -85,21 +94,44 @@ export function buildDiscoveredJobRecords(
   urls: string[],
   spec: { query: string; location?: string },
 ): NormalizedJobInput[] {
-  return urls.map((url) => ({
-    title: `${spec.query} discovered job${spec.location ? ` — ${spec.location}` : ""}`,
-    company: `${source} browser discovery`,
-    location: spec.location ?? null,
-    source,
-    sourceUrl: url,
-    description:
-      `Browser-assisted discovery found this ${source} job link for query "${spec.query}"` +
-      `${spec.location ? ` in "${spec.location}"` : ""}. Open locally to verify details before applying.`,
-    status: "new",
-    priority: "normal",
-    visaSignal: "unknown",
-    techStack: keywordsFromQuery(spec.query),
-    notes: "Phase 2B browser-assisted discovery. Human-speed search only; no apply/submit automation.",
-  }));
+  return urls.map((url) => {
+    const metadata = jobMetadataFromUrl(source, url);
+    return {
+      title: metadata.title ?? `${spec.query} discovered job${spec.location ? ` — ${spec.location}` : ""}`,
+      company: metadata.company ?? `${source} browser discovery`,
+      location: spec.location ?? null,
+      source,
+      sourceUrl: url,
+      description:
+        `Browser-assisted discovery found this ${source} job link for query "${spec.query}"` +
+        `${spec.location ? ` in "${spec.location}"` : ""}. Open locally to verify details before applying.`,
+      status: "new",
+      priority: "normal",
+      visaSignal: "unknown",
+      techStack: keywordsFromQuery(spec.query),
+      notes: "Phase 2B browser-assisted discovery. Human-speed search only; no apply/submit automation.",
+    };
+  });
+}
+
+function jobMetadataFromUrl(source: BrowserDiscoverySource, rawUrl: string) {
+  try {
+    const url = new URL(rawUrl);
+    if (source === "indeed") {
+      return {
+        title: cleanMetadataValue(url.searchParams.get("ti")),
+        company: cleanMetadataValue(url.searchParams.get("cmp")),
+      };
+    }
+  } catch {
+    // Keep generic discovery labels when URL metadata cannot be parsed.
+  }
+  return {};
+}
+
+function cleanMetadataValue(value: string | null) {
+  const cleaned = value?.replace(/\s+/g, " ").trim();
+  return cleaned || undefined;
 }
 
 function keywordsFromQuery(query: string) {
