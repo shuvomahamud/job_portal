@@ -181,6 +181,7 @@ export default async function JobDetailPage({
               jobTitle={job.title}
               status={job.status}
               priority={job.priority}
+              refreshAfterSave
             />
           </section>
 

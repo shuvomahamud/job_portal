@@ -1,16 +1,20 @@
 "use client";
 
-import { useActionState, useRef, useState } from "react";
+import { type FormEvent, useState } from "react";
+import { useRouter } from "next/navigation";
 import { clsx } from "clsx";
-import type { JobWorkflowActionState } from "@/app/(dashboard)/actions";
-import { updateJobWorkflow } from "@/app/(dashboard)/actions";
 import { JOB_STATUSES, PRIORITIES } from "@/lib/constants";
 import { humanize } from "@/lib/format";
 
 type JobStatus = (typeof JOB_STATUSES)[number];
 type JobPriority = (typeof PRIORITIES)[number];
 
-const initialActionState: JobWorkflowActionState = {
+type SaveState = {
+  status: "idle" | "success" | "error";
+  message: string;
+};
+
+const initialSaveState: SaveState = {
   status: "idle",
   message: "",
 };
@@ -21,44 +25,107 @@ export function JobWorkflowForm({
   status,
   priority,
   compact = false,
+  refreshAfterSave = false,
 }: {
   jobId: string;
   jobTitle: string;
   status: JobStatus;
   priority: JobPriority;
   compact?: boolean;
+  refreshAfterSave?: boolean;
 }) {
-  const formRef = useRef<HTMLFormElement>(null);
+  const router = useRouter();
   const [selectedStatus, setSelectedStatus] = useState(status);
   const [selectedPriority, setSelectedPriority] = useState(priority);
-  const [state, formAction, pending] = useActionState(
-    updateJobWorkflow,
-    initialActionState,
-  );
+  const [state, setState] = useState<SaveState>(initialSaveState);
+  const [pending, setPending] = useState(false);
 
-  const submitUpdatedForm = () => {
-    queueMicrotask(() => formRef.current?.requestSubmit());
+  const saveWorkflow = async (
+    nextStatus: JobStatus,
+    nextPriority: JobPriority,
+    previousStatus: JobStatus,
+    previousPriority: JobPriority,
+  ) => {
+    setPending(true);
+    setState({ status: "idle", message: "Saving workflow…" });
+
+    try {
+      const response = await fetch(`/api/jobs/${jobId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          status: nextStatus,
+          priority: nextPriority,
+        }),
+      });
+      const payload = (await response.json().catch(() => null)) as {
+        error?: { message?: string };
+      } | null;
+
+      if (!response.ok) {
+        throw new Error(
+          payload?.error?.message || "Workflow could not be saved.",
+        );
+      }
+
+      setState({ status: "success", message: "Workflow saved." });
+      if (refreshAfterSave) router.refresh();
+    } catch (error) {
+      setSelectedStatus(previousStatus);
+      setSelectedPriority(previousPriority);
+      setState({
+        status: "error",
+        message:
+          error instanceof Error
+            ? error.message
+            : "Workflow could not be saved.",
+      });
+    } finally {
+      setPending(false);
+    }
   };
 
   const changeStatus = (value: string) => {
-    setSelectedStatus(value as JobStatus);
-    submitUpdatedForm();
+    const nextStatus = value as JobStatus;
+    const previousStatus = selectedStatus;
+    setSelectedStatus(nextStatus);
+    void saveWorkflow(
+      nextStatus,
+      selectedPriority,
+      previousStatus,
+      selectedPriority,
+    );
   };
 
   const changePriority = (value: string) => {
-    setSelectedPriority(value as JobPriority);
-    submitUpdatedForm();
+    const nextPriority = value as JobPriority;
+    const previousPriority = selectedPriority;
+    setSelectedPriority(nextPriority);
+    void saveWorkflow(
+      selectedStatus,
+      nextPriority,
+      selectedStatus,
+      previousPriority,
+    );
+  };
+
+  const submitForm = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    void saveWorkflow(
+      selectedStatus,
+      selectedPriority,
+      selectedStatus,
+      selectedPriority,
+    );
   };
 
   const feedback = pending ? "Saving workflow…" : state.message;
 
   return (
     <form
-      action={formAction}
-      ref={formRef}
+      onSubmit={submitForm}
       className={compact ? "flex items-center gap-2" : "mt-5 space-y-4"}
     >
-      <input type="hidden" name="jobId" value={jobId} />
       <label className={clsx(!compact && "field")}>
         {!compact && <span>Status</span>}
         <select
