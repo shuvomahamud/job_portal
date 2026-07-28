@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useRef } from "react";
+import { useActionState, useRef, useState } from "react";
 import { clsx } from "clsx";
 import type { JobWorkflowActionState } from "@/app/(dashboard)/actions";
 import { updateJobWorkflow } from "@/app/(dashboard)/actions";
@@ -29,13 +29,25 @@ export function JobWorkflowForm({
   compact?: boolean;
 }) {
   const formRef = useRef<HTMLFormElement>(null);
+  const [selectedStatus, setSelectedStatus] = useState(status);
+  const [selectedPriority, setSelectedPriority] = useState(priority);
   const [state, formAction, pending] = useActionState(
     updateJobWorkflow,
     initialActionState,
   );
 
-  const saveOnChange = () => {
-    formRef.current?.requestSubmit();
+  const submitUpdatedForm = () => {
+    queueMicrotask(() => formRef.current?.requestSubmit());
+  };
+
+  const changeStatus = (value: string) => {
+    setSelectedStatus(value as JobStatus);
+    submitUpdatedForm();
+  };
+
+  const changePriority = (value: string) => {
+    setSelectedPriority(value as JobPriority);
+    submitUpdatedForm();
   };
 
   const feedback = pending ? "Saving workflow…" : state.message;
@@ -51,11 +63,11 @@ export function JobWorkflowForm({
         {!compact && <span>Status</span>}
         <select
           name="status"
-          defaultValue={status}
+          value={selectedStatus}
           aria-label={compact ? `Status for ${jobTitle}` : "Status"}
           className={clsx(compact && "compact-select")}
           disabled={pending}
-          onChange={saveOnChange}
+          onChange={(event) => changeStatus(event.currentTarget.value)}
         >
           {JOB_STATUSES.map((jobStatus) => (
             <option key={jobStatus} value={jobStatus}>
@@ -68,11 +80,11 @@ export function JobWorkflowForm({
         {!compact && <span>Priority</span>}
         <select
           name="priority"
-          defaultValue={priority}
+          value={selectedPriority}
           aria-label={compact ? `Priority for ${jobTitle}` : "Priority"}
           className={clsx(compact && "compact-select")}
           disabled={pending}
-          onChange={saveOnChange}
+          onChange={(event) => changePriority(event.currentTarget.value)}
         >
           {PRIORITIES.map((jobPriority) => (
             <option key={jobPriority} value={jobPriority}>
