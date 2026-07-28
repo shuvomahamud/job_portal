@@ -12,11 +12,7 @@ import {
   resumeVersions,
 } from "@/db/schema";
 import { requireDashboardUser } from "@/lib/auth";
-import {
-  FOLLOWUP_STATUSES,
-  JOB_STATUSES,
-  PRIORITIES,
-} from "@/lib/constants";
+import { FOLLOWUP_STATUSES, JOB_STATUSES, PRIORITIES } from "@/lib/constants";
 import { followupUpdateSchema, jobUpdateSchema } from "@/lib/validation";
 import { cancelCommand, createCommand, getCommandDetail } from "@/services/commands";
 import { updateJob } from "@/services/jobs";
@@ -46,17 +42,46 @@ const optionalHttpUrl = z
   })
   .nullable();
 
-export async function updateJobStatus(formData: FormData) {
-  await requireDashboardUser();
-  const jobId = z.uuid().parse(requiredString(formData, "jobId"));
-  const input = jobUpdateSchema.parse({
-    status: z.enum(JOB_STATUSES).parse(requiredString(formData, "status")),
-    priority: z.enum(PRIORITIES).parse(requiredString(formData, "priority")),
-  });
-  await updateJob(jobId, input);
-  revalidatePath("/jobs");
-  revalidatePath(`/jobs/${jobId}`);
-  revalidatePath("/");
+export type JobWorkflowActionState = {
+  status: "idle" | "success" | "error";
+  message: string;
+};
+
+export async function updateJobWorkflow(
+  _previousState: JobWorkflowActionState,
+  formData: FormData,
+): Promise<JobWorkflowActionState> {
+  try {
+    await requireDashboardUser();
+    const jobId = z.uuid().parse(requiredString(formData, "jobId"));
+    const input = jobUpdateSchema.parse({
+      status: z.enum(JOB_STATUSES).parse(requiredString(formData, "status")),
+      priority: z.enum(PRIORITIES).parse(requiredString(formData, "priority")),
+    });
+    const job = await updateJob(jobId, input);
+
+    if (!job) {
+      return {
+        status: "error",
+        message: "This job no longer exists. Refresh the page and try again.",
+      };
+    }
+
+    revalidatePath("/jobs");
+    revalidatePath(`/jobs/${jobId}`);
+    revalidatePath("/");
+
+    return {
+      status: "success",
+      message: "Workflow saved.",
+    };
+  } catch (error) {
+    console.error("Failed to update job workflow", error);
+    return {
+      status: "error",
+      message: "Workflow could not be saved. Try again.",
+    };
+  }
 }
 
 export async function saveCandidateProfile(formData: FormData) {

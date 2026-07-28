@@ -5,19 +5,13 @@ import {
   ExternalLink,
 } from "lucide-react";
 import { z } from "zod";
+import { JobWorkflowForm } from "@/components/job-workflow-form";
 import {
   SectionHeading,
   StatusBadge,
 } from "@/components/ui";
-import {
-  JOB_STATUSES,
-  PRIORITIES,
-} from "@/lib/constants";
 import { formatDate, formatDateTime, humanize } from "@/lib/format";
 import { getJobDetail } from "@/services/jobs";
-import {
-  updateJobStatus,
-} from "../../actions";
 
 export default async function JobDetailPage({
   params,
@@ -182,30 +176,12 @@ export default async function JobDetailPage({
 
           <section className="panel p-5 sm:p-6">
             <p className="eyebrow">Quick update</p>
-            <form action={updateJobStatus} className="mt-5 space-y-4">
-              <input type="hidden" name="jobId" value={job.id} />
-              <label className="field">
-                <span>Status</span>
-                <select name="status" defaultValue={job.status}>
-                  {JOB_STATUSES.map((status) => (
-                    <option key={status} value={status}>
-                      {humanize(status)}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="field">
-                <span>Priority</span>
-                <select name="priority" defaultValue={job.priority}>
-                  {PRIORITIES.map((priority) => (
-                    <option key={priority} value={priority}>
-                      {humanize(priority)}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <button className="primary-button w-full">Save workflow state</button>
-            </form>
+            <JobWorkflowForm
+              jobId={job.id}
+              jobTitle={job.title}
+              status={job.status}
+              priority={job.priority}
+            />
           </section>
 
           {job.notes && (

@@ -1,18 +1,17 @@
 import Link from "next/link";
 import { ExternalLink, Search, SearchCheck } from "lucide-react";
+import { JobWorkflowForm } from "@/components/job-workflow-form";
 import {
   EmptyState,
   PageHeader,
 } from "@/components/ui";
 import {
   JOB_STATUSES,
-  PRIORITIES,
   SELECTABLE_JOB_SOURCES,
 } from "@/lib/constants";
 import { formatDate, humanize } from "@/lib/format";
 import { jobsQuerySchema } from "@/lib/validation";
 import { listJobs } from "@/services/jobs";
-import { updateJobStatus } from "../actions";
 
 type SearchParams = Promise<Record<string, string | string[] | undefined>>;
 
@@ -127,34 +126,13 @@ export default async function JobsPage({
                       )}
                     </td>
                     <td className="min-w-[250px]">
-                      <form action={updateJobStatus} className="flex items-center gap-2">
-                        <input type="hidden" name="jobId" value={job.id} />
-                        <select
-                          name="status"
-                          defaultValue={job.status}
-                          aria-label={`Status for ${job.title}`}
-                          className="compact-select"
-                        >
-                          {JOB_STATUSES.map((status) => (
-                            <option key={status} value={status}>
-                              {humanize(status)}
-                            </option>
-                          ))}
-                        </select>
-                        <select
-                          name="priority"
-                          defaultValue={job.priority}
-                          aria-label={`Priority for ${job.title}`}
-                          className="compact-select"
-                        >
-                          {PRIORITIES.map((priority) => (
-                            <option key={priority} value={priority}>
-                              {humanize(priority)}
-                            </option>
-                          ))}
-                        </select>
-                        <button className="mini-button">Save</button>
-                      </form>
+                      <JobWorkflowForm
+                        jobId={job.id}
+                        jobTitle={job.title}
+                        status={job.status}
+                        priority={job.priority}
+                        compact
+                      />
                     </td>
                     <td className="whitespace-nowrap text-xs text-[var(--muted)]">
                       {formatDate(job.createdAt)}
