@@ -1,5 +1,7 @@
 import Link from "next/link";
 import { ExternalLink, Search, SearchCheck } from "lucide-react";
+import { DeleteFilteredJobsButton } from "@/components/delete-filtered-jobs-button";
+import { JobDeleteButton } from "@/components/job-delete-button";
 import { JobWorkflowForm } from "@/components/job-workflow-form";
 import {
   EmptyState,
@@ -90,6 +92,23 @@ export default async function JobsPage({
         <button className="secondary-button">Apply filters</button>
       </form>
 
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+        <p className="text-xs text-[var(--muted)]">
+          Bulk delete removes every job matching the active filters.
+        </p>
+        <DeleteFilteredJobsButton
+          matchCount={jobRows.length}
+          query={{
+            visibility: query.visibility,
+            status: query.status,
+            source: query.source,
+            company: query.company,
+            search: query.search,
+            minScore: query.minScore,
+          }}
+        />
+      </div>
+
       <section className="panel mt-5 overflow-hidden">
         {jobRows.length ? (
           <div className="overflow-x-auto">
@@ -101,7 +120,7 @@ export default async function JobsPage({
                   <th>Fit</th>
                   <th>Workflow</th>
                   <th>Added</th>
-                  <th aria-label="Source link" />
+                  <th aria-label="Actions" />
                 </tr>
               </thead>
               <tbody>
@@ -138,15 +157,18 @@ export default async function JobsPage({
                       {formatDate(job.createdAt)}
                     </td>
                     <td>
-                      <a
-                        href={job.sourceUrl}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="icon-button"
-                        aria-label={`Open ${job.title} source`}
-                      >
-                        <ExternalLink className="size-4" />
-                      </a>
+                      <div className="flex items-center justify-end gap-1.5">
+                        <a
+                          href={job.sourceUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="icon-button"
+                          aria-label={`Open ${job.title} source`}
+                        >
+                          <ExternalLink className="size-4" />
+                        </a>
+                        <JobDeleteButton jobId={job.id} jobTitle={job.title} />
+                      </div>
                     </td>
                   </tr>
                 ))}

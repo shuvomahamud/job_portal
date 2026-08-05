@@ -250,6 +250,7 @@ textarea:focus {
 
 .primary-button,
 .secondary-button,
+.danger-button,
 .mini-button,
 .icon-button {
   display: inline-flex;
@@ -298,6 +299,26 @@ textarea:focus {
   transform: translateY(-1px);
 }
 
+.danger-button {
+  min-height: 43px;
+  border: 1px solid color-mix(in srgb, var(--red) 35%, var(--line));
+  background: color-mix(in srgb, var(--red) 8%, #fff);
+  padding: 0.78rem 1rem;
+  color: var(--red);
+  font-size: 0.8rem;
+}
+
+.danger-button:hover:not(:disabled) {
+  border-color: var(--red);
+  background: color-mix(in srgb, var(--red) 14%, #fff);
+  transform: translateY(-1px);
+}
+
+.danger-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 .mini-button {
   min-height: 34px;
   border: 1px solid var(--line);
@@ -318,6 +339,17 @@ textarea:focus {
 .icon-button:hover {
   background: var(--soft);
   color: var(--ink);
+}
+
+.danger-icon-button:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--red) 40%, var(--line));
+  background: color-mix(in srgb, var(--red) 10%, #fff);
+  color: var(--red);
+}
+
+.danger-icon-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 
 .text-link {

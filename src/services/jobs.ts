@@ -56,7 +56,7 @@ export async function importJob(input: z.infer<typeof jobImportSchema>) {
   return job;
 }
 
-export async function listJobs(query: z.infer<typeof jobsQuerySchema>) {
+function buildJobFilterConditions(query: z.infer<typeof jobsQuerySchema>) {
   const conditions: SQL[] = [];
   if (query.status) conditions.push(eq(jobs.status, query.status));
   if (query.source) conditions.push(eq(jobs.source, query.source));
@@ -75,6 +75,11 @@ export async function listJobs(query: z.infer<typeof jobsQuerySchema>) {
   if (query.visibility === "dashboard" && !query.status) {
     conditions.push(notInArray(jobs.status, ["new", "reviewing", "archived"]));
   }
+  return conditions;
+}
+
+export async function listJobs(query: z.infer<typeof jobsQuerySchema>) {
+  const conditions = buildJobFilterConditions(query);
 
   return getDb()
     .select()
@@ -83,6 +88,27 @@ export async function listJobs(query: z.infer<typeof jobsQuerySchema>) {
     .orderBy(desc(jobs.createdAt))
     .limit(query.limit)
     .offset(query.offset);
+}
+
+export async function deleteJob(id: string) {
+  const [job] = await getDb()
+    .delete(jobs)
+    .where(eq(jobs.id, id))
+    .returning({ id: jobs.id });
+  return job ?? null;
+}
+
+export async function deleteJobsMatching(
+  query: z.infer<typeof jobsQuerySchema>,
+) {
+  const conditions = buildJobFilterConditions(query);
+  if (!conditions.length) {
+    throw new Error("Refusing to delete jobs without filter conditions.");
+  }
+  return getDb()
+    .delete(jobs)
+    .where(and(...conditions))
+    .returning({ id: jobs.id });
 }
 
 export async function getJobDetail(id: string) {
