@@ -16,54 +16,55 @@ type SummaryRow = {
   interviews_scheduled: number;
 };
 
-export async function getDashboardSummary() {
+export async function getDashboardSummary(userId: string) {
   const result = await getDb().execute<SummaryRow>(sql`
     SELECT
-      (SELECT COUNT(*)::int FROM jobs WHERE created_at >= CURRENT_DATE)
+      (SELECT COUNT(DISTINCT job_id)::int FROM job_role_matches WHERE user_id = ${userId} AND created_at >= CURRENT_DATE)
         AS jobs_found_today,
-      (SELECT COUNT(*)::int FROM jobs WHERE status = 'needs_review')
+      (SELECT COUNT(DISTINCT job_id)::int FROM job_role_matches WHERE user_id = ${userId} AND status = 'uncertain')
         AS jobs_needing_review,
-      (SELECT COUNT(*)::int FROM jobs WHERE status = 'ready_to_apply')
+      (SELECT COUNT(DISTINCT job_id)::int FROM job_role_matches WHERE user_id = ${userId} AND status = 'match')
         AS ready_to_apply,
       (
         SELECT COUNT(*)::int
         FROM applications
-        WHERE applied_at >= CURRENT_DATE
+        WHERE user_id = ${userId} AND applied_at >= CURRENT_DATE
       ) AS applied_today,
       (
         SELECT COUNT(*)::int
         FROM applications
-        WHERE applied_at >= DATE_TRUNC('week', NOW())
+        WHERE user_id = ${userId} AND applied_at >= DATE_TRUNC('week', NOW())
       ) AS applied_this_week,
       (
         SELECT COUNT(*)::int
         FROM pending_questions
-        WHERE status = 'open'
+        WHERE user_id = ${userId} AND status = 'open'
       ) AS questions_open,
       (
         SELECT COUNT(*)::int
         FROM applications
-        WHERE status = 'needs_manual'
+        WHERE user_id = ${userId} AND status = 'needs_manual'
       ) AS needs_manual,
       (
         SELECT COUNT(*)::int
         FROM applications
-        WHERE status = 'blocked'
+        WHERE user_id = ${userId} AND status = 'blocked'
       ) AS blocked,
       (
         SELECT COUNT(*)::int
         FROM applications
-        WHERE status = 'submission_unknown'
+        WHERE user_id = ${userId} AND status = 'submission_unknown'
       ) AS submission_unknown,
       (
         SELECT COUNT(*)::int
-        FROM followups
-        WHERE status = 'pending' AND due_at <= NOW()
+        FROM followups f
+        INNER JOIN applications a ON a.id = f.application_id
+        WHERE a.user_id = ${userId} AND f.status = 'pending' AND f.due_at <= NOW()
       ) AS followups_due,
       (
         SELECT COUNT(*)::int
         FROM applications
-        WHERE status = 'interview'
+        WHERE user_id = ${userId} AND status = 'interview'
       ) AS interviews_scheduled
   `);
 
@@ -118,6 +119,24 @@ export async function getDashboardSummary() {
                 href: "/",
               };
 
+  const roleTotals = await getDb().execute<{
+    role_id: string;
+    role_title: string;
+    total: number;
+    applied: number;
+  }>(sql`
+    SELECT
+      r.id AS role_id,
+      r.title AS role_title,
+      COUNT(a.id)::int AS total,
+      COUNT(a.id) FILTER (WHERE a.status IN ('applied', 'screening', 'interview', 'offer', 'rejected', 'withdrawn'))::int AS applied
+    FROM target_roles r
+    LEFT JOIN applications a ON a.target_role_id = r.id AND a.user_id = ${userId}
+    WHERE r.user_id = ${userId}
+    GROUP BY r.id, r.title
+    ORDER BY r.title
+  `);
+
   return {
     jobsFoundToday: summary.jobs_found_today,
     jobsNeedingReview: summary.jobs_needing_review,
@@ -130,6 +149,12 @@ export async function getDashboardSummary() {
     submissionUnknown: summary.submission_unknown,
     followupsDue: summary.followups_due,
     interviewsScheduled: summary.interviews_scheduled,
+    roleTotals: roleTotals.rows.map((row) => ({
+      roleId: row.role_id,
+      roleTitle: row.role_title,
+      total: row.total,
+      applied: row.applied,
+    })),
     nextBestAction,
   };
 }

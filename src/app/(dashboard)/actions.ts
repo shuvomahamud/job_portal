@@ -1,11 +1,12 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { z } from "zod";
 import { getDb } from "@/db";
 import {
   applications,
+  automationSettings,
   candidateProfiles,
   commandEvents,
   commonAnswers,
@@ -432,6 +433,90 @@ export async function queueApplyNow(jobId?: string) {
   revalidatePath("/applications");
   revalidatePath("/commands");
   revalidatePath("/jobs");
+}
+
+export async function setApplyPaused(paused: boolean) {
+  const user = await requireDashboardUser();
+  const value = z.boolean().parse(paused);
+  await getDb()
+    .insert(automationSettings)
+    .values({ userId: user.id, applyPaused: value, updatedAt: new Date() })
+    .onConflictDoUpdate({
+      target: automationSettings.userId,
+      set: { applyPaused: value, updatedAt: new Date() },
+    });
+  revalidatePath("/applications");
+  revalidatePath("/");
+}
+
+export async function safeRetryApplication(applicationId: string) {
+  const user = await requireDashboardUser();
+  const id = z.uuid().parse(applicationId);
+  const db = getDb();
+  const [application] = await db
+    .select()
+    .from(applications)
+    .where(and(eq(applications.id, id), eq(applications.userId, user.id)))
+    .limit(1);
+  if (!application) throw new Error("Application not found.");
+  const retryable = ["needs_manual", "blocked", "failed"].includes(application.status) ||
+    (application.status === "filling" && application.stopReason === "filled_not_submitted");
+  if (!retryable) {
+    throw new Error(`Application status ${application.status} is not safe to retry.`);
+  }
+  const [openQuestions] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(pendingQuestions)
+    .where(
+      and(
+        eq(pendingQuestions.applicationId, application.id),
+        eq(pendingQuestions.status, "open"),
+      ),
+    );
+  if ((openQuestions?.count ?? 0) > 0) {
+    throw new Error("Answer the open application questions before retrying.");
+  }
+  await db
+    .update(applications)
+    .set({ status: "ready", stopReason: "safe_retry_requested", updatedAt: new Date() })
+    .where(eq(applications.id, application.id));
+  await createCommand(
+    {
+      type: "apply_to_jobs",
+      payloadJson: { jobIds: [application.jobId] },
+      priority: "high",
+    },
+    { source: "dashboard", requestedBy: user.id },
+  );
+  revalidatePath("/applications");
+  revalidatePath("/commands");
+}
+
+export async function reverifySubmission(applicationId: string) {
+  const user = await requireDashboardUser();
+  const id = z.uuid().parse(applicationId);
+  const [application] = await getDb()
+    .select({ id: applications.id })
+    .from(applications)
+    .where(
+      and(
+        eq(applications.id, id),
+        eq(applications.userId, user.id),
+        eq(applications.status, "submission_unknown"),
+      ),
+    )
+    .limit(1);
+  if (!application) throw new Error("Unknown submission not found.");
+  await createCommand(
+    {
+      type: "verify_submission",
+      payloadJson: { applicationId: id },
+      priority: "high",
+    },
+    { source: "dashboard", requestedBy: user.id },
+  );
+  revalidatePath("/applications");
+  revalidatePath("/commands");
 }
 
 export async function resolveSubmissionUnknown(formData: FormData) {

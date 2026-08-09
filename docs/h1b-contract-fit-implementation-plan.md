@@ -381,7 +381,7 @@ Then run:
 1. `discover_jobs_browser`
 2. `run_rule_filter`
 3. Review `ready_to_apply` and `needs_review` jobs in dashboard.
-4. Use browser extension only for form filling after approval.
+4. Use the guarded local worker apply flow only after approval; the legacy browser extension path is retired.
 
 ## 9. Verification plan
 

@@ -7,9 +7,9 @@ type RouteContext = { params: Promise<{ id: string }> };
 
 export async function GET(_: Request, context: RouteContext) {
   return handleApi(async () => {
-    await requireDashboardUser();
+    const user = await requireDashboardUser();
     const { id } = await context.params;
-    const job = await getJobDetail(id);
+    const job = await getJobDetail(id, user.id);
     if (!job) throw new ApiError(404, "NOT_FOUND", "Job not found.");
     return jsonOk(job);
   });

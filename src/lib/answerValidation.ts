@@ -11,6 +11,15 @@ function stringOptions(options: unknown[]): string[] {
   return options.map((option) => String(option ?? "").trim()).filter(Boolean);
 }
 
+export function resolveNumberedOptionReply(options: unknown[], raw: string): string | null {
+  const values = stringOptions(options);
+  if (values.length <= 8) return null;
+  const match = /^\s*(\d+)\s*$/.exec(raw);
+  if (!match) return null;
+  const index = Number(match[1]) - 1;
+  return index >= 0 && index < values.length ? values[index]! : null;
+}
+
 function isYesNoOptions(options: string[]): boolean {
   if (options.length < 2 || options.length > 4) return false;
   const normalized = options.map((option) => option.toLowerCase());

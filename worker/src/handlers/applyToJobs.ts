@@ -12,6 +12,7 @@ import { applyToJob, type ApplyStopReason } from "../apply/applyRunner";
 import { effectiveMode, type ApplyMode } from "../apply/applyPolicy";
 import { betweenApplicationsMs } from "../apply/humanInput";
 import { resolveNotifyChannel } from "../notify";
+import { isApplyPaused } from "../apply/applyEligibility";
 
 const payloadSchema = z
   .object({
@@ -35,6 +36,13 @@ export async function handleApplyToJobs(
 
   const input = payloadSchema.parse(payload);
   const userId = requireCommandUserId(context.command.requestedBy);
+  if (await isApplyPaused(userId)) {
+    return {
+      status: "completed",
+      resultJson: { paused: true },
+      message: "Automated apply is paused for this user.",
+    };
+  }
   const mode = effectiveMode(input.mode, cfg.JOB_APPLY_MODE);
   const maxJobs = Math.min(
     input.maxJobs ?? cfg.JOB_APPLY_MAX_JOBS_PER_COMMAND,
@@ -109,6 +117,10 @@ export async function handleApplyToJobs(
           mode,
           page,
           browserContext: browserSession.context,
+          deadlineAt: Math.min(
+            deadlineAt,
+            Date.now() + cfg.JOB_APPLY_MAX_MINUTES_PER_APPLICATION * 60 * 1000,
+          ),
         });
         results.push({ jobId, stopReason: result.stopReason });
         if (result.stopReason === "submitted") summary.submitted += 1;
@@ -121,7 +133,8 @@ export async function handleApplyToJobs(
         } else if (
           result.stopReason === "already_applied" ||
           result.stopReason === "external_ats" ||
-          result.stopReason === "needs_manual"
+          result.stopReason === "needs_manual" ||
+          result.stopReason === "time_limit"
         ) {
           summary.skipped += 1;
         } else summary.failed += 1;

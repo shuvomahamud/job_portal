@@ -53,6 +53,13 @@ export function decideFieldAction(input: DecideFieldInput): FieldAction {
   const matchType = match?.matchType;
   const matchConfidence = match?.confidence ?? 0;
 
+  if (field.options.length && value && !optionMatches(field.options, value)) {
+    if (dropdownMapped && suggestedValue) {
+      return { kind: "fill", value: suggestedValue, source: matchType ?? "rule" };
+    }
+    return { kind: "ask", reason: "Answer does not match available options." };
+  }
+
   if (categoryAlwaysRequiresReview(field.fieldCategory)) {
     if (
       value &&
@@ -94,19 +101,12 @@ export function decideFieldAction(input: DecideFieldInput): FieldAction {
     return { kind: "ask", reason: "LLM match is not trusted for auto-fill." };
   }
 
-  if (field.options.length && value && !optionMatches(field.options, value)) {
-    if (dropdownMapped && suggestedValue) {
-      return { kind: "fill", value: suggestedValue, source: matchType ?? "rule" };
-    }
-    return { kind: "ask", reason: "Answer does not match available options." };
-  }
-
   if (savedAnswer?.id.startsWith("profile:") && value) {
     return { kind: "fill", value, source: "profile" };
   }
 
   if (value && matchType) {
-    return { kind: "fill", value, source: matchType };
+    return { kind: "ask", reason: "Saved answer did not meet the confidence threshold." };
   }
 
   if (field.required) {

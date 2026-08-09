@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { getDb } from "@/db";
 import { pendingQuestions } from "@/db/schema";
 import { acceptPendingAnswer } from "@/services/pendingAnswers";
+import { resolveNumberedOptionReply } from "@/lib/answerValidation";
 import { createTelegramChannel } from "../../../../../worker/src/notify/telegramChannel";
 
 export const runtime = "nodejs";
@@ -85,7 +86,19 @@ export async function POST(request: Request) {
       .limit(1);
     if (!row) return NextResponse.json({ ok: true, ignored: true });
     question = row;
-    rawAnswer = update.message.text;
+    const options = row.optionsJson ?? [];
+    const numberedOption = resolveNumberedOptionReply(options, update.message.text);
+    if (options.length > 8 && /^\s*\d+\s*$/.test(update.message.text)) {
+      if (!numberedOption) {
+        return NextResponse.json(
+          { error: `Choose a number from 1 to ${options.length}.` },
+          { status: 400 },
+        );
+      }
+      rawAnswer = numberedOption;
+    } else {
+      rawAnswer = update.message.text;
+    }
   } else {
     return NextResponse.json({ ok: true, ignored: true });
   }

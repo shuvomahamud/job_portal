@@ -73,6 +73,7 @@ export const commandTypeEnum = pgEnum("command_type", [
   "reprocess_job",
   "run_apply_cycle",
   "apply_to_jobs",
+  "verify_submission",
   "sync_resume_text",
 ]);
 
@@ -287,6 +288,16 @@ export const targetRoles = pgTable(
   ],
 );
 
+export const automationSettings = pgTable("automation_settings", {
+  userId: uuid("user_id")
+    .primaryKey()
+    .references(() => users.id, { onDelete: "cascade" }),
+  applyPaused: boolean("apply_paused").default(false).notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true })
+    .defaultNow()
+    .notNull(),
+});
+
 export const commonAnswers = pgTable(
   "common_answers",
   {
@@ -387,6 +398,7 @@ export const applications = pgTable(
     confirmationEvidence: jsonb("confirmation_evidence").$type<
       Record<string, unknown>
     >(),
+    workerCommandId: uuid("worker_command_id"),
     submittedAt: timestamp("submitted_at", { withTimezone: true }),
     appliedAt: timestamp("applied_at", { withTimezone: true }),
     followupAt: timestamp("followup_at", { withTimezone: true }),
@@ -654,6 +666,7 @@ export const integrationEvents = pgTable(
 
 export const usersRelations = relations(users, ({ one, many }) => ({
   candidateProfile: one(candidateProfiles),
+  automationSettings: one(automationSettings),
   resumes: many(resumeVersions),
   commonAnswers: many(commonAnswers),
   applications: many(applications),

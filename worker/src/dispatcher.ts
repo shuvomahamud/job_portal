@@ -10,6 +10,7 @@ import { handleRunLocalLlmExtraction } from "./handlers/runLocalLlmExtraction";
 import { handleRunRuleFilter } from "./handlers/runRuleFilter";
 import { handleRunJobSearch } from "./handlers/runJobSearch";
 import { handleSyncResumeText } from "./handlers/syncResumeText";
+import { handleVerifySubmission } from "./handlers/verifySubmission";
 import type { CommandHandler, DashboardCommand, HandlerResult } from "./types";
 
 const phase2Handlers: Record<string, CommandHandler> = {
@@ -21,6 +22,7 @@ const phase2Handlers: Record<string, CommandHandler> = {
   run_local_llm_extraction: handleRunLocalLlmExtraction,
   sync_resume_text: handleSyncResumeText,
   apply_to_jobs: handleApplyToJobs,
+  verify_submission: handleVerifySubmission,
   run_apply_cycle: handleRunApplyCycle,
 };
 

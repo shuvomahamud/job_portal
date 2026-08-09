@@ -218,6 +218,11 @@ export const commandPayloadSchemas = {
       maxRuntimeMinutes: z.number().int().min(1).max(180).optional(),
     })
     .strict(),
+  verify_submission: z
+    .object({
+      applicationId: z.uuid(),
+    })
+    .strict(),
   sync_resume_text: z
     .object({
       resumeVersionIds: z.array(z.uuid()).min(1).max(50).optional(),

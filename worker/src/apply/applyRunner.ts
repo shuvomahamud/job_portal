@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, or } from "drizzle-orm";
 import * as schema from "../../../src/db/schema";
 import type { BrowserContextLike, PageLike } from "../browser/playwrightTypes";
 import { getConfig, sleep } from "../config";
@@ -10,8 +10,13 @@ import {
   expandComboboxOptions,
   resolveFormRoot,
 } from "../formfill/domDetector";
-import { buildSuggestion, enhanceFieldsWithOllama } from "../formfill/suggestions";
-import type { DetectedField } from "../formfill/types";
+import {
+  buildSuggestion,
+  enhanceFieldsWithOllama,
+  mapDropdownWithOllama,
+} from "../formfill/suggestions";
+import { optionMatches } from "../formfill/optionMatching";
+import type { DetectedField, MatchSettings } from "../formfill/types";
 import { logger } from "../logger";
 import { resolveNotifyChannel } from "../notify";
 import { humanDelayMs } from "../search/browserDiscovery";
@@ -24,6 +29,11 @@ import {
   writePlanArtifact,
 } from "./artifacts";
 import { decideFieldAction, effectiveMode, type ApplyMode } from "./applyPolicy";
+import {
+  ELIGIBLE_ROLE_MATCH_STATUS,
+  getRemainingDailyCapacity,
+  isApplyPaused,
+} from "./applyEligibility";
 import { adapterFor, isExternalAts, sourceUrlAllowed } from "./applySteps";
 import { fillDetectedField } from "./fillField";
 import {
@@ -48,16 +58,27 @@ export type ApplyStopReason =
   | "error";
 
 const BLOCKED_RETRY_STATUSES = [
+  "draft",
+  "filling",
+  "awaiting_answer",
   "submitting",
   "submission_unknown",
   "applied",
   "screening",
   "interview",
   "offer",
+  "rejected",
+  "withdrawn",
 ] as const;
 
 export function isBlockedFromRetry(status: string): boolean {
   return (BLOCKED_RETRY_STATUSES as readonly string[]).includes(status);
+}
+
+export function statusAfterApplyFailure(
+  submittingWritten: boolean,
+): "submission_unknown" | "needs_manual" {
+  return submittingWritten ? "submission_unknown" : "needs_manual";
 }
 
 export type ApplyJobInput = {
@@ -77,6 +98,7 @@ export type ApplyJobInput = {
   /** Test hook: simulate crash after writing submitting status. */
   crashAfterSubmittingWrite?: boolean;
   random?: () => number;
+  deadlineAt?: number;
 };
 
 function shortId(): string {
@@ -143,6 +165,56 @@ async function upsertApplication(input: {
   return row!;
 }
 
+async function claimApplication(input: {
+  commandId: string;
+  userId: string;
+  jobId: string;
+  targetRoleId: string;
+  jobRoleMatchId: string;
+  resumeVersionId: string;
+  applyUrl: string;
+}) {
+  const now = new Date();
+  const [row] = await getWorkerDb()
+    .insert(schema.applications)
+    .values({
+      userId: input.userId,
+      jobId: input.jobId,
+      targetRoleId: input.targetRoleId,
+      jobRoleMatchId: input.jobRoleMatchId,
+      resumeVersionId: input.resumeVersionId,
+      applyUrl: input.applyUrl,
+      workerCommandId: input.commandId,
+      status: "draft",
+      stopReason: null,
+      updatedAt: now,
+    })
+    .onConflictDoUpdate({
+      target: [schema.applications.jobId, schema.applications.userId],
+      set: {
+        status: "draft",
+        targetRoleId: input.targetRoleId,
+        jobRoleMatchId: input.jobRoleMatchId,
+        resumeVersionId: input.resumeVersionId,
+        applyUrl: input.applyUrl,
+        stopReason: null,
+        workerCommandId: input.commandId,
+        updatedAt: now,
+      },
+      setWhere: or(
+        inArray(schema.applications.status, [
+          "ready",
+          "needs_manual",
+          "blocked",
+          "failed",
+        ]),
+        eq(schema.applications.workerCommandId, input.commandId),
+      ),
+    })
+    .returning();
+  return row ?? null;
+}
+
 export async function applyToJob(input: ApplyJobInput): Promise<{
   stopReason: ApplyStopReason;
   applicationId?: string;
@@ -152,6 +224,19 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
   const random = input.random ?? Math.random;
   const mode = effectiveMode(input.mode, cfg.JOB_APPLY_MODE);
   const artifacts: string[] = [];
+  const matchSettings: MatchSettings = {
+    ollamaBaseUrl: cfg.OLLAMA_BASE_URL,
+    ollamaAllowedRemoteHosts: cfg.ollamaAllowedRemoteHosts,
+    ollamaRequestTimeoutMs: cfg.OLLAMA_REQUEST_TIMEOUT_MS,
+    ollamaKeepAlive: cfg.OLLAMA_KEEP_ALIVE,
+    selectedModel: cfg.OLLAMA_MODEL,
+    autoFillConfidenceThreshold: 0.9,
+    allowAutoFillLowRisk: true,
+    requireReviewMediumHigh: true,
+    useOllamaForAmbiguous: true,
+    allowOneClickSavedGender: false,
+    allowOneClickSavedWorkEligibility: false,
+  };
 
   if (!cfg.JOB_APPLY_ENABLED && !input.job.sourceUrl.startsWith("file:")) {
     throw new Error("Job apply is disabled. Set JOB_APPLY_ENABLED=true only on the Mac worker.");
@@ -165,8 +250,15 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
   }
 
   const database = getWorkerDb();
+  if (await isApplyPaused(input.userId)) {
+    return { stopReason: "needs_manual", artifacts };
+  }
   const blocking = await database
-    .select({ id: schema.applications.id, status: schema.applications.status })
+    .select({
+      id: schema.applications.id,
+      status: schema.applications.status,
+      workerCommandId: schema.applications.workerCommandId,
+    })
     .from(schema.applications)
     .where(
       and(
@@ -177,28 +269,76 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
     )
     .limit(1);
   if (blocking[0]) {
-    return {
-      stopReason: blocking[0].status === "applied" ? "already_applied" : "already_applied",
-      applicationId: blocking[0].id,
-      artifacts,
-    };
+    if (blocking[0].status === "submitting") {
+      await database
+        .update(schema.applications)
+        .set({
+          status: "submission_unknown",
+          stopReason: "recovered_stale_submitting_state",
+          updatedAt: new Date(),
+        })
+        .where(eq(schema.applications.id, blocking[0].id));
+      return {
+        stopReason: "already_applied",
+        applicationId: blocking[0].id,
+        artifacts,
+      };
+    }
+    const recoverableSameCommand =
+      blocking[0].workerCommandId === input.commandId &&
+      ["draft", "filling"].includes(blocking[0].status);
+    if (!recoverableSameCommand) {
+      return {
+        stopReason: "already_applied",
+        applicationId: blocking[0].id,
+        artifacts,
+      };
+    }
   }
 
   const [match] = await database
-    .select()
+    .select({
+      id: schema.jobRoleMatches.id,
+      targetRoleId: schema.jobRoleMatches.targetRoleId,
+      resumeVersionId: schema.jobRoleMatches.resumeVersionId,
+      score: schema.jobRoleMatches.score,
+      roleDailyCap: schema.targetRoles.maxApplicationsPerDay,
+    })
     .from(schema.jobRoleMatches)
+    .innerJoin(schema.targetRoles, eq(schema.targetRoles.id, schema.jobRoleMatches.targetRoleId))
     .where(
       and(
         eq(schema.jobRoleMatches.jobId, input.job.id),
         eq(schema.jobRoleMatches.userId, input.userId),
-        eq(schema.jobRoleMatches.status, "ready_to_apply"),
+        eq(schema.jobRoleMatches.status, ELIGIBLE_ROLE_MATCH_STATUS),
+        eq(schema.targetRoles.active, true),
       ),
     )
     .orderBy(desc(schema.jobRoleMatches.score))
     .limit(1);
 
+  if (!match?.resumeVersionId) {
+    await upsertApplication({
+      userId: input.userId,
+      jobId: input.job.id,
+      status: "needs_manual",
+      stopReason: "No eligible role match with a resume.",
+    });
+    return { stopReason: "needs_manual", artifacts };
+  }
+
+  const capacity = await getRemainingDailyCapacity({
+    userId: input.userId,
+    targetRoleId: match.targetRoleId,
+    globalCap: cfg.JOB_APPLY_MAX_PER_DAY,
+    roleCap: match.roleDailyCap,
+  });
+  if (capacity.remaining <= 0) {
+    return { stopReason: "time_limit", artifacts };
+  }
+
   let resumePath: string | null = null;
-  const resumeVersionId: string | null = match?.resumeVersionId ?? null;
+  const resumeVersionId = match.resumeVersionId;
   if (resumeVersionId) {
     try {
       const material = await materializeResume(resumeVersionId);
@@ -217,15 +357,18 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
     }
   }
 
-  const application = await upsertApplication({
+  const application = await claimApplication({
+    commandId: input.commandId,
     userId: input.userId,
     jobId: input.job.id,
-    status: "draft",
-    targetRoleId: match?.targetRoleId,
-    jobRoleMatchId: match?.id,
+    targetRoleId: match.targetRoleId,
+    jobRoleMatchId: match.id,
     resumeVersionId,
     applyUrl: input.job.sourceUrl,
   });
+  if (!application) {
+    return { stopReason: "already_applied", artifacts };
+  }
 
   const adapter = adapterFor(input.job.source);
   const artifactCtx = await createArtifactContext({
@@ -236,9 +379,16 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
     context: input.browserContext,
   });
   await startTrace(artifactCtx);
+  let submittingWritten = false;
 
   try {
     if (await getCommandStatus(input.commandId) === "canceled") {
+      await upsertApplication({
+        userId: input.userId,
+        jobId: input.job.id,
+        status: "needs_manual",
+        stopReason: "canceled",
+      });
       return { stopReason: "canceled", applicationId: application.id, artifacts: artifactCtx.paths };
     }
 
@@ -284,6 +434,7 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
 
     const pages = input.browserContext.pages();
     const activePage = pages[pages.length - 1] ?? input.page;
+    artifactCtx.page = activePage;
     const applyUrl = activePage.url();
     const external = isExternalAts(applyUrl, adapter.allowedApplyHosts);
     if (external.external && input.job.source !== "fixture") {
@@ -327,7 +478,34 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
     let stallRetries = 0;
 
     for (let step = 0; step < cfg.JOB_APPLY_MAX_STEPS; step += 1) {
+      if (await isApplyPaused(input.userId)) {
+        await upsertApplication({
+          userId: input.userId,
+          jobId: input.job.id,
+          status: "needs_manual",
+          stopReason: "apply_paused",
+        });
+        await finishTrace(artifactCtx, true);
+        return { stopReason: "canceled", applicationId: application.id, artifacts: artifactCtx.paths };
+      }
+      if (input.deadlineAt && Date.now() >= input.deadlineAt) {
+        await upsertApplication({
+          userId: input.userId,
+          jobId: input.job.id,
+          status: "needs_manual",
+          stopReason: "application_time_limit",
+        });
+        await finishTrace(artifactCtx, true);
+        return { stopReason: "time_limit", applicationId: application.id, artifacts: artifactCtx.paths };
+      }
       if (await getCommandStatus(input.commandId) === "canceled") {
+        await upsertApplication({
+          userId: input.userId,
+          jobId: input.job.id,
+          status: "needs_manual",
+          stopReason: "canceled",
+        });
+        await finishTrace(artifactCtx, true);
         return { stopReason: "canceled", applicationId: application.id, artifacts: artifactCtx.paths };
       }
 
@@ -347,21 +525,48 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
 
       const { frame } = await resolveFormRoot(activePage, adapter.allowedApplyHosts);
       let fields = await detectFields(frame);
-      fields = await expandComboboxOptions(frame, fields);
-      const enhanced = await enhanceFieldsWithOllama(fields, undefined, { maxCalls: 5 });
+      if (mode !== "dry_run") {
+        fields = await expandComboboxOptions(frame, fields);
+      }
+      const enhanced = await enhanceFieldsWithOllama(fields, matchSettings, {
+        maxCalls: 5,
+        minConfidence: 0.55,
+      });
       fields = enhanced.fields;
+      let llmCalls = enhanced.calls;
 
       const fingerprint = fieldFingerprint(fields, frame.url());
       const asks: Array<{ field: DetectedField; reason: string }> = [];
 
       for (const field of fields) {
         const suggestion = buildSuggestion(field, answers);
+        let suggestedValue = suggestion.suggestedValue || undefined;
+        let dropdownMapped = false;
+        if (
+          suggestedValue &&
+          enhanced.available &&
+          field.options.length > 0 &&
+          !optionMatches(field.options, suggestedValue) &&
+          llmCalls < 5
+        ) {
+          llmCalls += 1;
+          const mapped = await mapDropdownWithOllama(
+            field,
+            suggestedValue,
+            matchSettings,
+          );
+          if (mapped) {
+            suggestedValue = mapped;
+            dropdownMapped = true;
+          }
+        }
         const action = decideFieldAction({
           field,
           match: suggestion.match,
           savedAnswer: suggestion.savedAnswer,
-          suggestedValue: suggestion.suggestedValue || undefined,
+          suggestedValue,
           trustLlmAnswers: cfg.JOB_APPLY_TRUST_LLM_ANSWERS,
+          dropdownMapped,
         });
         plan.push({
           step,
@@ -392,14 +597,14 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
         await sleep(fixture ? 10 : interFieldDelayMs(random));
       }
 
-      await screenshot(artifactCtx, `step-${step}`);
+      const stepScreenshotPath = await screenshot(artifactCtx, `step-${step}`);
 
       if (mode === "dry_run") {
         await writePlanArtifact(artifactCtx, plan);
         await upsertApplication({
           userId: input.userId,
           jobId: input.job.id,
-          status: "draft",
+          status: "ready",
           stopReason: "dry_run",
           notes: `Dry-run plan with ${plan.length} field decisions.`,
         });
@@ -432,7 +637,11 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
               riskLevel: ask.field.riskLevel,
               status: "open",
               channel: channel.name,
-              contextJson: { applyUrl: activePage.url(), stepIndex: step },
+              contextJson: {
+                applyUrl: activePage.url(),
+                stepIndex: step,
+                screenshotPath: stepScreenshotPath,
+              },
               expiresAt,
             })
             .returning();
@@ -488,6 +697,26 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
       }
 
       if (advance.isTerminalSubmit) {
+        if (await isApplyPaused(input.userId)) {
+          await upsertApplication({
+            userId: input.userId,
+            jobId: input.job.id,
+            status: "needs_manual",
+            stopReason: "apply_paused_before_submit",
+          });
+          await finishTrace(artifactCtx, true);
+          return { stopReason: "canceled", applicationId: application.id, artifacts: artifactCtx.paths };
+        }
+        if (input.deadlineAt && Date.now() >= input.deadlineAt) {
+          await upsertApplication({
+            userId: input.userId,
+            jobId: input.job.id,
+            status: "needs_manual",
+            stopReason: "application_time_limit_before_submit",
+          });
+          await finishTrace(artifactCtx, true);
+          return { stopReason: "time_limit", applicationId: application.id, artifacts: artifactCtx.paths };
+        }
         if (mode === "fill_only") {
           await screenshot(artifactCtx, "98-before-submit");
           await upsertApplication({
@@ -511,6 +740,7 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
           submittedAt: new Date(),
           applyUrl: activePage.url(),
         });
+        submittingWritten = true;
         // Crash simulation for tests — must leave submission_unknown if we never confirm.
         if (input.crashAfterSubmittingWrite) {
           await upsertApplication({
@@ -526,6 +756,20 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
 
         await screenshot(artifactCtx, "98-before-submit");
         await sleep(preSubmitDelayMs(random));
+        if (
+          (await isApplyPaused(input.userId)) ||
+          (await getCommandStatus(input.commandId)) === "canceled"
+        ) {
+          await upsertApplication({
+            userId: input.userId,
+            jobId: input.job.id,
+            status: "needs_manual",
+            stopReason: "submit_canceled_before_click",
+          });
+          submittingWritten = false;
+          await finishTrace(artifactCtx, true);
+          return { stopReason: "canceled", applicationId: application.id, artifacts: artifactCtx.paths };
+        }
         await advance.locator.click({ timeout: 5000 });
         await sleep(1500 + random() * 1500);
         const success = await adapter.detectSuccess(activePage);
@@ -598,7 +842,7 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
     await upsertApplication({
       userId: input.userId,
       jobId: input.job.id,
-      status: "needs_manual",
+      status: statusAfterApplyFailure(submittingWritten),
       stopReason: error instanceof Error ? error.message : "error",
     }).catch(() => undefined);
     await finishTrace(artifactCtx, true);

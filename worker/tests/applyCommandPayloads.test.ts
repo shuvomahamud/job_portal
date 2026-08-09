@@ -21,6 +21,12 @@ test("new apply command payloads validate", () => {
     validateCommandPayload("run_apply_cycle", { phase: "discover", attempt: 0 }),
     { phase: "discover", attempt: 0 },
   );
+  assert.deepEqual(
+    validateCommandPayload("verify_submission", {
+      applicationId: "44444444-4444-4444-8444-444444444444",
+    }),
+    { applicationId: "44444444-4444-4444-8444-444444444444" },
+  );
 });
 
 test("apply command payloads reject forbidden execution keys", () => {

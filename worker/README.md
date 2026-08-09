@@ -1,8 +1,8 @@
 # Job Portal Worker
 
-The preferred topology uses one always-on TypeScript queue worker on the VPS.
-It performs discovery itself and calls Ollama on the Mac over Tailscale for
-inference. The Mac does not run a second queue consumer.
+The preferred topology uses a discovery/matching worker on the VPS and a
+separate, explicitly enabled apply worker on the logged-in Mac. Only the Mac
+worker may claim application or submission-verification commands.
 
 ## VPS discovery worker
 
@@ -47,7 +47,23 @@ Responsibilities:
 
 - runs Ollama `qwen3.5:9b`;
 - accepts requests only through the private Tailscale path;
-- does not claim commands or connect to the database.
+- serves local matching requests from the VPS worker.
+
+## Mac apply worker
+
+Run this worker only with the dedicated logged-in browser profile. Its command
+allow-list must include apply orchestration and verification, and those command
+types must never be enabled on the VPS:
+
+```env
+WORKER_COMMAND_TYPES=run_apply_cycle,apply_to_jobs,verify_submission,sync_resume_text
+JOB_APPLY_ENABLED=false
+JOB_APPLY_MODE=dry_run
+```
+
+Keep `JOB_APPLY_ENABLED=false` until the migration, dashboard, dry-run review,
+and headed fill-only rollout checks are complete. `verify_submission` only
+checks for confirmation evidence; it never clicks an apply or submit control.
 
 Do not expose Ollama publicly. Do not place `OPENAI_API_KEY`, the Neon URL,
 browser cookies, or SSH keys in Git.

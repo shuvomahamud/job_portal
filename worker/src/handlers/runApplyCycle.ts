@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { and, desc, eq, inArray, notExists } from "drizzle-orm";
+import { and, desc, eq, inArray, notExists, or } from "drizzle-orm";
 import * as schema from "../../../src/db/schema";
 import { getConfig } from "../config";
 import {
@@ -10,6 +10,11 @@ import {
 } from "../db";
 import { requireCommandUserId } from "../requireCommandUserId";
 import type { HandlerContext, HandlerResult } from "../types";
+import {
+  ELIGIBLE_ROLE_MATCH_STATUS,
+  getRemainingDailyCapacity,
+  isApplyPaused,
+} from "../apply/applyEligibility";
 
 const payloadSchema = z
   .object({
@@ -31,6 +36,9 @@ export async function handleRunApplyCycle(
   const phase = input.phase ?? "discover";
   const cfg = getConfig();
   const database = getWorkerDb();
+  if (await isApplyPaused(userId)) {
+    return { phase, message: "Automated apply is paused for this user." };
+  }
 
   if (phase === "discover") {
     const roles = await getActiveTargetRolesForUser(userId);
@@ -98,7 +106,15 @@ export async function handleRunApplyCycle(
     const children = await database
       .select({ id: schema.commands.id, status: schema.commands.status })
       .from(schema.commands)
-      .where(inArray(schema.commands.id, matchingCommandIds));
+      .where(
+        or(
+          inArray(schema.commands.id, matchingCommandIds),
+          and(
+            eq(schema.commands.type, "run_local_llm_extraction"),
+            inArray(schema.commands.parentCommandId, matchingCommandIds),
+          ),
+        ),
+      );
     const stillRunning = children.some((child) =>
       ["pending", "claimed"].includes(child.status),
     );
@@ -137,13 +153,17 @@ export async function handleRunApplyCycle(
     .select({
       jobId: schema.jobRoleMatches.jobId,
       score: schema.jobRoleMatches.score,
+      targetRoleId: schema.jobRoleMatches.targetRoleId,
+      roleDailyCap: schema.targetRoles.maxApplicationsPerDay,
     })
     .from(schema.jobRoleMatches)
     .innerJoin(schema.jobs, eq(schema.jobs.id, schema.jobRoleMatches.jobId))
+    .innerJoin(schema.targetRoles, eq(schema.targetRoles.id, schema.jobRoleMatches.targetRoleId))
     .where(
       and(
         eq(schema.jobRoleMatches.userId, userId),
-        eq(schema.jobRoleMatches.status, "ready_to_apply"),
+        eq(schema.jobRoleMatches.status, ELIGIBLE_ROLE_MATCH_STATUS),
+        eq(schema.targetRoles.active, true),
         inArray(schema.jobs.source, ["indeed", "dice"]),
         notExists(
           database
@@ -159,14 +179,30 @@ export async function handleRunApplyCycle(
       ),
     )
     .orderBy(desc(schema.jobRoleMatches.score))
-    .limit(maxJobs * 3);
+    .limit(maxJobs * 10);
 
   const seen = new Set<string>();
   const jobIds: string[] = [];
+  const roleRemaining = new Map<string, number>();
+  let globalRemaining: number | null = null;
   for (const row of eligible) {
     if (seen.has(row.jobId)) continue;
+    if (!roleRemaining.has(row.targetRoleId)) {
+      const capacity = await getRemainingDailyCapacity({
+        userId,
+        targetRoleId: row.targetRoleId,
+        globalCap: cfg.JOB_APPLY_MAX_PER_DAY,
+        roleCap: row.roleDailyCap,
+      });
+      globalRemaining ??= capacity.globalRemaining;
+      roleRemaining.set(row.targetRoleId, capacity.roleRemaining);
+    }
+    const remainingForRole = roleRemaining.get(row.targetRoleId) ?? 0;
+    if ((globalRemaining ?? 0) <= 0 || remainingForRole <= 0) continue;
     seen.add(row.jobId);
     jobIds.push(row.jobId);
+    globalRemaining = (globalRemaining ?? 0) - 1;
+    roleRemaining.set(row.targetRoleId, remainingForRole - 1);
     if (jobIds.length >= maxJobs) break;
   }
 

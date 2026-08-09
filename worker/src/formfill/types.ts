@@ -129,6 +129,9 @@ export interface FieldSuggestion {
 
 export interface MatchSettings {
   ollamaBaseUrl: string;
+  ollamaAllowedRemoteHosts?: string[];
+  ollamaRequestTimeoutMs?: number;
+  ollamaKeepAlive?: string;
   selectedModel: string;
   autoFillConfidenceThreshold: number;
   allowAutoFillLowRisk: boolean;
@@ -140,7 +143,6 @@ export interface MatchSettings {
 
 /** @deprecated structural alias for ported modules */
 export type ExtensionSettings = MatchSettings;
-
 
 
 

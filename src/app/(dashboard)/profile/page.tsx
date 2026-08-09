@@ -45,7 +45,7 @@ export default async function ProfilePage() {
       <PageHeader
         eyebrow="Candidate source of truth"
         title="Profile hub"
-        description="Keep stable facts here so later reviewers, workers, and the extension read consistent answers."
+        description="Keep stable facts here so later reviewers and workers use consistent answers."
       />
 
       <div className="grid gap-6 xl:grid-cols-[minmax(0,1.3fr)_minmax(340px,.7fr)]">

@@ -148,11 +148,9 @@ export function profileToSavedAnswers(profile: AnswerBankProfile): SavedAnswer[]
 }
 
 export function commonAnswerToSavedAnswer(row: CommonAnswerRow): SavedAnswer {
-  const category = (FIELD_CATEGORY_SET.has(row.category)
-    ? row.category
-    : FIELD_CATEGORY_SET.has(row.questionKey)
-      ? row.questionKey
-      : "custom_short_answer") as FieldCategory;
+  const category = (FIELD_CATEGORY_SET.has(row.questionKey)
+    ? row.questionKey
+    : "custom_short_answer") as FieldCategory;
   return {
     id: `common:${row.id}`,
     normalizedQuestion: normalizeQuestion(row.questionText),
@@ -330,6 +328,7 @@ export async function learnAnswer(
       and(
         eq(schema.pendingQuestions.userId, input.userId),
         eq(schema.pendingQuestions.normalizedQuestion, normalizedQuestion),
+        eq(schema.pendingQuestions.category, input.field.fieldCategory),
         eq(schema.pendingQuestions.status, "open"),
       ),
     );

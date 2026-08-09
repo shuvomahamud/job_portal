@@ -5,7 +5,7 @@ import {
   effectiveMode,
 } from "../src/apply/applyPolicy";
 import type { DetectedField, SavedAnswer } from "../src/formfill/types";
-import { isBlockedFromRetry } from "../src/apply/applyRunner";
+import { isBlockedFromRetry, statusAfterApplyFailure } from "../src/apply/applyRunner";
 import {
   betweenApplicationsMs,
   interFieldDelayMs,
@@ -14,6 +14,10 @@ import {
   typingDelayMs,
 } from "../src/apply/humanInput";
 import { isExternalAts, sourceUrlAllowed } from "../src/apply/applySteps";
+import {
+  ELIGIBLE_ROLE_MATCH_STATUS,
+  remainingDailyCapacity,
+} from "../src/apply/applyEligibility";
 
 function field(overrides: Partial<DetectedField> = {}): DetectedField {
   return {
@@ -118,6 +122,42 @@ test("decideFieldAction fills exact low-risk matches", () => {
   if (action.kind === "fill") assert.equal(action.value, "a@example.com");
 });
 
+test("decideFieldAction asks when a saved match is below the confidence threshold", () => {
+  const action = decideFieldAction({
+    field: field(),
+    match: {
+      fieldId: "f1",
+      savedAnswerId: "a1",
+      matchType: "normalized",
+      confidence: 0.7,
+      reason: "weak normalized match",
+      requiresReview: true,
+    },
+    savedAnswer: answer(),
+    suggestedValue: "a@example.com",
+    trustLlmAnswers: false,
+  });
+  assert.equal(action.kind, "ask");
+});
+
+test("decideFieldAction asks before filling an incompatible option", () => {
+  const action = decideFieldAction({
+    field: field({ inputType: "select", options: ["Yes", "No"] }),
+    match: {
+      fieldId: "f1",
+      savedAnswerId: "a1",
+      matchType: "exact",
+      confidence: 0.99,
+      reason: "exact",
+      requiresReview: false,
+    },
+    savedAnswer: answer({ answerValue: "Maybe" }),
+    suggestedValue: "Maybe",
+    trustLlmAnswers: false,
+  });
+  assert.equal(action.kind, "ask");
+});
+
 test("seeded human delays stay in documented ranges", () => {
   const rng = () => 0;
   assert.equal(typingDelayMs(rng), 45);
@@ -141,11 +181,34 @@ const BLOCKED_RETRY_STATUSES = new Set([
   "screening",
   "interview",
   "offer",
+  "rejected",
+  "withdrawn",
+  "draft",
+  "filling",
+  "awaiting_answer",
 ]);
 
 test("submission_unknown is not retried by a subsequent apply cycle", () => {
   assert.equal(isBlockedFromRetry("submission_unknown"), true);
-  assert.equal(isBlockedFromRetry("draft"), false);
-  assert.equal(isBlockedFromRetry("awaiting_answer"), false);
+  assert.equal(isBlockedFromRetry("draft"), true);
+  assert.equal(isBlockedFromRetry("awaiting_answer"), true);
+  assert.equal(isBlockedFromRetry("ready"), false);
   assert.equal(BLOCKED_RETRY_STATUSES.has("submission_unknown"), true);
+});
+
+test("any failure after the submitting write remains submission_unknown", () => {
+  assert.equal(statusAfterApplyFailure(true), "submission_unknown");
+  assert.equal(statusAfterApplyFailure(false), "needs_manual");
+});
+
+test("daily capacity uses the tighter global or per-role cap", () => {
+  assert.equal(ELIGIBLE_ROLE_MATCH_STATUS, "match");
+  assert.equal(
+    remainingDailyCapacity({ globalCap: 15, globalCount: 4, roleCap: 5, roleCount: 4 }).remaining,
+    1,
+  );
+  assert.equal(
+    remainingDailyCapacity({ globalCap: 15, globalCount: 15, roleCap: null, roleCount: 0 }).remaining,
+    0,
+  );
 });

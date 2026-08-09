@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { validateAnswerForQuestion } from "../../src/lib/answerValidation";
+import {
+  resolveNumberedOptionReply,
+  validateAnswerForQuestion,
+} from "../../src/lib/answerValidation";
 import { resolveChannel } from "../src/notify/channel";
 import { createDashboardChannel } from "../src/notify/dashboardChannel";
 
@@ -29,6 +32,13 @@ test("validateAnswerForQuestion rejects out-of-range years", () => {
     "99",
   );
   assert.equal(result.ok, false);
+});
+
+test("numbered Telegram replies resolve options only for long option lists", () => {
+  const options = Array.from({ length: 10 }, (_, index) => `Option ${index + 1}`);
+  assert.equal(resolveNumberedOptionReply(options, "3"), "Option 3");
+  assert.equal(resolveNumberedOptionReply(options, "11"), null);
+  assert.equal(resolveNumberedOptionReply(["One", "Two"], "1"), null);
 });
 
 test("resolveChannel falls back to dashboard when Telegram is unset", () => {

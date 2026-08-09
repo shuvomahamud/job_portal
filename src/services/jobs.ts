@@ -7,11 +7,14 @@ import {
   ilike,
   notInArray,
   or,
+  sql,
   type SQL,
 } from "drizzle-orm";
 import { getDb } from "@/db";
 import {
   applications,
+  commandEvents,
+  commands,
   followups,
   jobReviews,
   jobs,
@@ -111,12 +114,12 @@ export async function deleteJobsMatching(
     .returning({ id: jobs.id });
 }
 
-export async function getJobDetail(id: string) {
+export async function getJobDetail(id: string, userId: string) {
   const db = getDb();
   const [job] = await db.select().from(jobs).where(eq(jobs.id, id)).limit(1);
   if (!job) return null;
 
-  const [reviews, applicationRows, followupRows] = await Promise.all([
+  const [reviews, applicationRows, followupRows, applicationEvents] = await Promise.all([
     db
       .select()
       .from(jobReviews)
@@ -125,20 +128,39 @@ export async function getJobDetail(id: string) {
     db
       .select()
       .from(applications)
-      .where(eq(applications.jobId, id))
+      .where(and(eq(applications.jobId, id), eq(applications.userId, userId)))
       .orderBy(desc(applications.createdAt)),
     db
       .select()
       .from(followups)
-      .where(eq(followups.jobId, id))
+      .innerJoin(applications, eq(applications.id, followups.applicationId))
+      .where(and(eq(followups.jobId, id), eq(applications.userId, userId)))
       .orderBy(desc(followups.dueAt)),
+    db
+      .select({
+        id: commandEvents.id,
+        eventType: commandEvents.eventType,
+        message: commandEvents.message,
+        metadataJson: commandEvents.metadataJson,
+        createdAt: commandEvents.createdAt,
+      })
+      .from(commandEvents)
+      .innerJoin(commands, eq(commands.id, commandEvents.commandId))
+      .where(
+        and(
+          eq(commands.requestedBy, userId),
+          eq(sql<string>`${commandEvents.metadataJson}->>'jobId'`, id),
+        ),
+      )
+      .orderBy(desc(commandEvents.createdAt)),
   ]);
 
   return {
     ...job,
     reviews,
     applications: applicationRows,
-    followups: followupRows,
+    followups: followupRows.map((row) => row.followups),
+    applicationEvents,
   };
 }
 

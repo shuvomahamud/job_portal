@@ -12,6 +12,7 @@ import {
 } from "@/components/ui";
 import { formatDate, formatDateTime, humanize } from "@/lib/format";
 import { getJobDetail } from "@/services/jobs";
+import { requireDashboardUser } from "@/lib/auth";
 import { queueApplyNow } from "../../actions";
 
 export default async function JobDetailPage({
@@ -21,7 +22,8 @@ export default async function JobDetailPage({
 }) {
   const parsedId = z.uuid().safeParse((await params).id);
   if (!parsedId.success) notFound();
-  const job = await getJobDetail(parsedId.data);
+  const user = await requireDashboardUser();
+  const job = await getJobDetail(parsedId.data, user.id);
   if (!job) notFound();
 
   return (
@@ -167,6 +169,15 @@ export default async function JobDetailPage({
                 detail="submitted_at is set before the terminal click; applied_at only after confirmation."
               />
             </div>
+            {job.applicationEvents.length ? (
+              <ol className="mt-5 space-y-3 border-t border-[var(--line)] pt-5">
+                {job.applicationEvents.map((event) => (
+                  <li key={event.id} className="text-sm text-[var(--muted)]">
+                    {formatDateTime(event.createdAt)} · {humanize(event.eventType)} · {event.message}
+                  </li>
+                ))}
+              </ol>
+            ) : null}
           </section>
         </div>
 

@@ -1,9 +1,14 @@
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { getDb } from "@/db";
 import {
   applications,
+  automationSettings,
+  commandEvents,
+  commands,
+  jobRoleMatches,
   jobs,
   pendingQuestions,
+  resumeVersions,
   targetRoles,
 } from "@/db/schema";
 import { EmptyState, PageHeader, SectionHeading, StatusBadge } from "@/components/ui";
@@ -11,7 +16,10 @@ import { requireDashboardUser } from "@/lib/auth";
 import { formatDate, formatDateTime } from "@/lib/format";
 import {
   queueApplyNow,
+  reverifySubmission,
   resolveSubmissionUnknown,
+  safeRetryApplication,
+  setApplyPaused,
   setTargetRoleActive,
 } from "../actions";
 
@@ -34,10 +42,14 @@ export default async function ApplicationsPage({
       jobTitle: jobs.title,
       company: jobs.company,
       roleTitle: targetRoles.title,
+      matchScore: jobRoleMatches.score,
+      resumeName: resumeVersions.originalFilename,
     })
     .from(applications)
     .leftJoin(jobs, eq(jobs.id, applications.jobId))
     .leftJoin(targetRoles, eq(targetRoles.id, applications.targetRoleId))
+    .leftJoin(jobRoleMatches, eq(jobRoleMatches.id, applications.jobRoleMatchId))
+    .leftJoin(resumeVersions, eq(resumeVersions.id, applications.resumeVersionId))
     .where(and(...conditions))
     .orderBy(desc(applications.updatedAt))
     .limit(100);
@@ -52,6 +64,40 @@ export default async function ApplicationsPage({
     .select({ count: sql<number>`count(*)::int` })
     .from(pendingQuestions)
     .where(and(eq(pendingQuestions.userId, user.id), eq(pendingQuestions.status, "open")));
+
+  const [settings] = await db
+    .select({ applyPaused: automationSettings.applyPaused })
+    .from(automationSettings)
+    .where(eq(automationSettings.userId, user.id))
+    .limit(1);
+  const applyPaused = settings?.applyPaused ?? false;
+
+  const jobIds = rows.map((row) => row.application.jobId);
+  const events = jobIds.length
+    ? await db
+        .select({
+          jobId: sql<string>`${commandEvents.metadataJson}->>'jobId'`,
+          eventType: commandEvents.eventType,
+          message: commandEvents.message,
+          metadataJson: commandEvents.metadataJson,
+          createdAt: commandEvents.createdAt,
+        })
+        .from(commandEvents)
+        .innerJoin(commands, eq(commands.id, commandEvents.commandId))
+        .where(
+          and(
+            eq(commands.requestedBy, user.id),
+            inArray(sql<string>`${commandEvents.metadataJson}->>'jobId'`, jobIds),
+          ),
+        )
+        .orderBy(desc(commandEvents.createdAt))
+    : [];
+  const eventsByJob = new Map<string, typeof events>();
+  for (const event of events) {
+    const current = eventsByJob.get(event.jobId) ?? [];
+    current.push(event);
+    eventsByJob.set(event.jobId, current);
+  }
 
   return (
     <>
@@ -77,6 +123,21 @@ export default async function ApplicationsPage({
           <p className="text-sm text-[var(--muted)]">Shown</p>
           <p className="mt-2 text-2xl font-semibold">{rows.length}</p>
         </div>
+      </section>
+
+      <section className="panel mb-6 p-5 sm:p-7">
+        <SectionHeading
+          title="Global apply control"
+          description="Pause all discovery-to-apply cycles and direct application commands for your account."
+        />
+        <form action={setApplyPaused.bind(null, !applyPaused)}>
+          <button className={applyPaused ? "primary-button" : "secondary-button"} type="submit">
+            {applyPaused ? "Resume automated apply" : "Pause automated apply"}
+          </button>
+          <span className="ml-3 text-sm text-[var(--muted)]">
+            Currently {applyPaused ? "paused" : "running when enabled on the worker"}
+          </span>
+        </form>
       </section>
 
       <section className="panel mb-6 p-5 sm:p-7">
@@ -107,6 +168,19 @@ export default async function ApplicationsPage({
 
       <section className="panel p-5 sm:p-7">
         <SectionHeading title="Application timeline" description="Newest updates first." />
+        <form method="get" className="mb-5 flex flex-wrap gap-3">
+          <select name="status" defaultValue={params.status ?? ""} className="input-field">
+            <option value="">All statuses</option>
+            {["draft", "filling", "awaiting_answer", "submitting", "submission_unknown", "applied", "needs_manual", "blocked", "failed"].map((status) => (
+              <option key={status} value={status}>{status}</option>
+            ))}
+          </select>
+          <select name="roleId" defaultValue={params.roleId ?? ""} className="input-field">
+            <option value="">All roles</option>
+            {roles.map((role) => <option key={role.id} value={role.id}>{role.title}</option>)}
+          </select>
+          <button className="secondary-button" type="submit">Filter</button>
+        </form>
         {rows.length === 0 ? (
           <EmptyState
             title="No applications yet"
@@ -114,7 +188,17 @@ export default async function ApplicationsPage({
           />
         ) : (
           <div className="space-y-4">
-            {rows.map(({ application, jobTitle, company, roleTitle }) => (
+            {rows.map(({ application, jobTitle, company, roleTitle, matchScore, resumeName }) => {
+              const auditEvents = eventsByJob.get(application.jobId) ?? [];
+              const artifactPaths = auditEvents.flatMap((event) => {
+                const artifacts = event.metadataJson?.artifacts;
+                return Array.isArray(artifacts)
+                  ? artifacts.filter((path): path is string => typeof path === "string")
+                  : [];
+              });
+              const retryable = ["needs_manual", "blocked", "failed"].includes(application.status) ||
+                (application.status === "filling" && application.stopReason === "filled_not_submitted");
+              return (
               <article
                 key={application.id}
                 className="rounded-2xl border border-[var(--line)] bg-white/70 p-4"
@@ -138,8 +222,38 @@ export default async function ApplicationsPage({
                 </div>
                 <p className="mt-3 text-sm text-[var(--muted)]">
                   Applied {application.appliedAt ? formatDate(application.appliedAt) : "—"} · Resume{" "}
-                  {application.resumeVersionId?.slice(0, 8) ?? "—"}
+                  {resumeName ?? application.resumeVersionId?.slice(0, 8) ?? "—"} · Match score {matchScore ?? "—"}
                 </p>
+                {application.confirmationEvidence && Object.keys(application.confirmationEvidence).length ? (
+                  <p className="mt-2 text-xs text-[var(--muted)]">
+                    Confirmation: {JSON.stringify(application.confirmationEvidence)}
+                  </p>
+                ) : null}
+                {artifactPaths.length ? (
+                  <details className="mt-3 text-xs text-[var(--muted)]">
+                    <summary className="cursor-pointer font-medium">Artifacts ({artifactPaths.length})</summary>
+                    <ul className="mt-2 space-y-1 font-mono">
+                      {[...new Set(artifactPaths)].map((path) => <li className="break-all" key={path}>{path}</li>)}
+                    </ul>
+                  </details>
+                ) : null}
+                {auditEvents.length ? (
+                  <details className="mt-3 text-xs text-[var(--muted)]">
+                    <summary className="cursor-pointer font-medium">Audit timeline ({auditEvents.length})</summary>
+                    <ol className="mt-2 space-y-2">
+                      {auditEvents.map((event, index) => (
+                        <li key={`${event.createdAt.toISOString()}-${index}`}>
+                          {formatDateTime(event.createdAt)} · {event.eventType} · {event.message}
+                        </li>
+                      ))}
+                    </ol>
+                  </details>
+                ) : null}
+                {retryable ? (
+                  <form className="mt-3" action={safeRetryApplication.bind(null, application.id)}>
+                    <button className="secondary-button" type="submit">Safe retry</button>
+                  </form>
+                ) : null}
                 {application.status === "submission_unknown" ? (
                   <div className="mt-3 flex flex-wrap gap-2">
                     <form action={resolveSubmissionUnknown}>
@@ -156,10 +270,16 @@ export default async function ApplicationsPage({
                         Mark not applied
                       </button>
                     </form>
+                    <form action={reverifySubmission.bind(null, application.id)}>
+                      <button className="secondary-button" type="submit">
+                        Re-verify
+                      </button>
+                    </form>
                   </div>
                 ) : null}
               </article>
-            ))}
+              );
+            })}
           </div>
         )}
       </section>

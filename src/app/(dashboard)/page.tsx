@@ -25,7 +25,7 @@ import { listJobs } from "@/services/jobs";
 export default async function DashboardPage() {
   const user = await requireDashboardUser();
   const [summary, recentJobs, recentCommands, profiles, roles, latestRuns] = await Promise.all([
-    getDashboardSummary(),
+    getDashboardSummary(user.id),
     listJobs(jobsQuerySchema.parse({ limit: 5 })),
     listCommands({ limit: 4, requestedBy: user.id }),
     getDb().select().from(candidateProfiles).where(eq(candidateProfiles.userId, user.id)).limit(1),
@@ -114,6 +114,25 @@ export default async function DashboardPage() {
           <MetricCard key={metric.label} {...metric} />
         ))}
       </div>
+
+      {summary.roleTotals.length ? (
+        <section className="panel mt-8 p-5 sm:p-7">
+          <SectionHeading
+            title="Applications by role"
+            description="Application records and confirmed submissions for each target role."
+          />
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            {summary.roleTotals.map((role) => (
+              <div key={role.roleId} className="rounded-2xl border border-[var(--line)] bg-white/55 p-4">
+                <p className="font-semibold text-[var(--ink)]">{role.roleTitle}</p>
+                <p className="mt-2 text-sm text-[var(--muted)]">
+                  {role.applied} applied · {role.total} total records
+                </p>
+              </div>
+            ))}
+          </div>
+        </section>
+      ) : null}
 
       <FindMatchingJobsForm
         defaults={{

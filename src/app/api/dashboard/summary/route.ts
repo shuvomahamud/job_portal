@@ -4,7 +4,7 @@ import { getDashboardSummary } from "@/services/dashboard";
 
 export async function GET() {
   return handleApi(async () => {
-    await requireDashboardUser();
-    return jsonOk(await getDashboardSummary());
+    const user = await requireDashboardUser();
+    return jsonOk(await getDashboardSummary(user.id));
   });
 }

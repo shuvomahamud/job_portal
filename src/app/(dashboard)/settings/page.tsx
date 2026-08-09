@@ -101,6 +101,14 @@ export default function SettingsPage() {
               APP_BASE_URL is used for absolute links and deployment metadata.
             </p>
           </section>
+          <section className="rounded-2xl border border-amber-300 bg-amber-50 p-5 sm:p-6">
+            <p className="font-semibold text-amber-950">Automated application risk</p>
+            <p className="mt-3 text-sm leading-6 text-amber-900">
+              Browser-based application submission may violate a job board&apos;s terms of service
+              or trigger anti-bot controls. Enable it only after accepting that risk. The worker
+              must stop on CAPTCHA or blocking signals and must never attempt a bypass.
+            </p>
+          </section>
           <section className="panel p-5 sm:p-6">
             <div className="flex items-center gap-3">
               <ShieldCheck className="size-5 text-[var(--accent-dark)]" />
