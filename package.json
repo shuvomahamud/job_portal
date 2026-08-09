@@ -26,6 +26,7 @@
     "worker:start": "tsx worker/src/runner.ts",
     "worker:health": "tsx worker/src/health.ts",
     "worker:ollama-smoke": "tsx worker/scripts/ollama-smoke.ts",
+    "worker:cycle": "tsx worker/scripts/enqueueApplyCycle.ts",
     "worker:typecheck": "tsc -p worker/tsconfig.json --noEmit",
     "worker:test": "tsx --test worker/tests/*.test.ts"
   },

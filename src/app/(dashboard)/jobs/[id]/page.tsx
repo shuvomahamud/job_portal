@@ -12,6 +12,7 @@ import {
 } from "@/components/ui";
 import { formatDate, formatDateTime, humanize } from "@/lib/format";
 import { getJobDetail } from "@/services/jobs";
+import { queueApplyNow } from "../../actions";
 
 export default async function JobDetailPage({
   params,
@@ -43,6 +44,11 @@ export default async function JobDetailPage({
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
+          <form action={queueApplyNow.bind(null, job.id)}>
+            <button type="submit" className="primary-button">
+              Apply now
+            </button>
+          </form>
           <a
             href={job.sourceUrl}
             target="_blank"
@@ -124,8 +130,17 @@ export default async function JobDetailPage({
                     : "Not started"
                 }
                 detail={
+                  job.applications[0]?.stopReason ??
                   job.applications[0]?.applicationNotes ??
                   "No application record is linked yet."
+                }
+              />
+              <InfoCard
+                label="Apply URL"
+                value={job.applications[0]?.applyUrl ? "Captured" : "—"}
+                detail={
+                  job.applications[0]?.applyUrl ??
+                  "Filled after the worker opens the apply flow."
                 }
               />
               <InfoCard
@@ -139,6 +154,17 @@ export default async function JobDetailPage({
                   job.followups[0]?.notes ??
                   "A follow-up will appear here once scheduled."
                 }
+              />
+              <InfoCard
+                label="Submitted / applied"
+                value={
+                  job.applications[0]?.appliedAt
+                    ? formatDateTime(job.applications[0].appliedAt)
+                    : job.applications[0]?.submittedAt
+                      ? formatDateTime(job.applications[0].submittedAt)
+                      : "—"
+                }
+                detail="submitted_at is set before the terminal click; applied_at only after confirmation."
               />
             </div>
           </section>

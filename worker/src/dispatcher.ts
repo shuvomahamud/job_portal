@@ -5,6 +5,7 @@ import { handleApplyToJobs } from "./handlers/applyToJobs";
 import { handleDiscoverJobsBrowser } from "./handlers/discoverJobsBrowser";
 import { handleFindMatchingJobs } from "./handlers/findMatchingJobs";
 import { handleImportJobs } from "./handlers/importJobs";
+import { handleRunApplyCycle } from "./handlers/runApplyCycle";
 import { handleRunLocalLlmExtraction } from "./handlers/runLocalLlmExtraction";
 import { handleRunRuleFilter } from "./handlers/runRuleFilter";
 import { handleRunJobSearch } from "./handlers/runJobSearch";
@@ -20,6 +21,7 @@ const phase2Handlers: Record<string, CommandHandler> = {
   run_local_llm_extraction: handleRunLocalLlmExtraction,
   sync_resume_text: handleSyncResumeText,
   apply_to_jobs: handleApplyToJobs,
+  run_apply_cycle: handleRunApplyCycle,
 };
 
 export function supportedPhase2CommandTypes() {

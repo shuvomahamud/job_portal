@@ -75,6 +75,7 @@ const envSchema = z.object({
   JOB_APPLY_ARTIFACT_DIR: z.string().optional(),
   JOB_APPLY_TRACE: boolFromEnv(true),
   JOB_APPLY_TRUST_LLM_ANSWERS: boolFromEnv(false),
+  WORKER_OWNER_USER_ID: z.string().uuid().optional(),
 });
 
 export type WorkerConfig = z.infer<typeof envSchema> & {

@@ -5,10 +5,12 @@ import { and, eq } from "drizzle-orm";
 import { z } from "zod";
 import { getDb } from "@/db";
 import {
+  applications,
   candidateProfiles,
   commandEvents,
   commonAnswers,
   followups,
+  jobs,
   pendingQuestions,
   resumeVersions,
   targetRoles,
@@ -406,4 +408,75 @@ export async function dismissPendingQuestion(formData: FormData) {
       ),
     );
   revalidatePath("/questions");
+}
+
+export async function queueApplyNow(jobId?: string) {
+  const user = await requireDashboardUser();
+  if (jobId) {
+    await createCommand(
+      {
+        type: "apply_to_jobs",
+        payloadJson: { jobIds: [z.uuid().parse(jobId)] },
+        priority: "high",
+      },
+      { source: "dashboard", requestedBy: user.id },
+    );
+  } else {
+    await createCommand(
+      {
+        type: "run_apply_cycle",
+        payloadJson: { phase: "discover" },
+        priority: "normal",
+      },
+      { source: "dashboard", requestedBy: user.id },
+    );
+  }
+  revalidatePath("/applications");
+  revalidatePath("/commands");
+  revalidatePath("/jobs");
+}
+
+export async function resolveSubmissionUnknown(formData: FormData) {
+  const user = await requireDashboardUser();
+  const applicationId = z.uuid().parse(requiredString(formData, "applicationId"));
+  const resolution = z.enum(["applied", "not_applied"]).parse(requiredString(formData, "resolution"));
+  const db = getDb();
+  const [application] = await db
+    .select()
+    .from(applications)
+    .where(and(eq(applications.id, applicationId), eq(applications.userId, user.id)))
+    .limit(1);
+  if (!application) throw new Error("Application not found.");
+  if (application.status !== "submission_unknown") {
+    throw new Error("Only submission_unknown applications can be resolved this way.");
+  }
+
+  if (resolution === "applied") {
+    await db.batch([
+      db
+        .update(applications)
+        .set({
+          status: "applied",
+          appliedAt: new Date(),
+          stopReason: "resolved_manual_applied",
+          updatedAt: new Date(),
+        })
+        .where(eq(applications.id, applicationId)),
+      db
+        .update(jobs)
+        .set({ status: "applied", updatedAt: new Date() })
+        .where(eq(jobs.id, application.jobId)),
+    ]);
+  } else {
+    await db
+      .update(applications)
+      .set({
+        status: "needs_manual",
+        stopReason: "resolved_manual_not_applied",
+        updatedAt: new Date(),
+      })
+      .where(eq(applications.id, applicationId));
+  }
+  revalidatePath("/applications");
+  revalidatePath(`/jobs/${application.jobId}`);
 }

@@ -43,41 +43,41 @@ export default async function DashboardPage() {
 
   const metrics = [
     {
-      label: "Jobs found today",
-      value: summary.jobsFoundToday,
-      icon: SearchCheck,
-      detail: "New records added since midnight",
-    },
-    {
-      label: "Need review",
-      value: summary.jobsNeedingReview,
-      icon: MessageSquareText,
-      detail: "Waiting for a fit decision",
+      label: "Applied today",
+      value: summary.appliedToday,
+      icon: CalendarCheck2,
+      detail: "Confirmed applications since midnight",
       accent: true,
-    },
-    {
-      label: "Ready to apply",
-      value: summary.readyToApply,
-      icon: FileCheck2,
-      detail: "Cleared for a human application",
     },
     {
       label: "Applied this week",
       value: summary.appliedThisWeek,
-      icon: CalendarCheck2,
+      icon: FileCheck2,
       detail: "Applications sent since Monday",
     },
     {
-      label: "Follow-ups due",
-      value: summary.followupsDue,
-      icon: CalendarClock,
-      detail: "Messages due now or overdue",
+      label: "Questions awaiting",
+      value: summary.questionsOpen,
+      icon: MessageSquareText,
+      detail: "Open pending apply questions",
     },
     {
-      label: "Interviews",
-      value: summary.interviewsScheduled,
+      label: "Needs manual",
+      value: summary.needsManual,
       icon: BriefcaseBusiness,
-      detail: "Active interview-stage applications",
+      detail: "External ATS or stalled applies",
+    },
+    {
+      label: "Blocked",
+      value: summary.blocked,
+      icon: SearchCheck,
+      detail: "Captcha or anti-bot stops",
+    },
+    {
+      label: "Unknown submissions",
+      value: summary.submissionUnknown,
+      icon: CalendarClock,
+      detail: "Resolve on /applications",
     },
   ];
 
