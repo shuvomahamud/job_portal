@@ -64,6 +64,17 @@ const envSchema = z.object({
   TELEGRAM_WEBHOOK_SECRET: z.string().trim().min(8).optional(),
   JOB_APPLY_NOTIFY_CHANNEL: z.enum(["telegram", "dashboard"]).default("dashboard"),
   JOB_APPLY_QUESTION_TTL_HOURS: intFromEnv(72, 1, 720),
+  JOB_APPLY_ENABLED: boolFromEnv(false),
+  JOB_APPLY_MODE: z.enum(["dry_run", "fill_only", "fill_and_submit"]).default("dry_run"),
+  JOB_APPLY_MAX_PER_DAY: intFromEnv(15, 1, 100),
+  JOB_APPLY_MAX_JOBS_PER_COMMAND: intFromEnv(5, 1, 10),
+  JOB_APPLY_MAX_MINUTES_PER_APPLICATION: intFromEnv(20, 1, 120),
+  JOB_APPLY_MAX_STEPS: intFromEnv(8, 1, 20),
+  JOB_APPLY_MIN_GAP_SECONDS: intFromEnv(90, 0, 3600),
+  JOB_APPLY_MAX_GAP_SECONDS: intFromEnv(420, 0, 7200),
+  JOB_APPLY_ARTIFACT_DIR: z.string().optional(),
+  JOB_APPLY_TRACE: boolFromEnv(true),
+  JOB_APPLY_TRUST_LLM_ANSWERS: boolFromEnv(false),
 });
 
 export type WorkerConfig = z.infer<typeof envSchema> & {
@@ -88,6 +99,11 @@ export function getConfig(): WorkerConfig {
     ollamaAllowedRemoteHosts: parsed.OLLAMA_ALLOWED_REMOTE_HOSTS.split(",").map((item) => item.trim()).filter(Boolean),
   };
   return cachedConfig;
+}
+
+/** Test-only: clear cached env so process.env mutations take effect. */
+export function resetConfigCacheForTests() {
+  cachedConfig = null;
 }
 
 export function sleep(ms: number) {

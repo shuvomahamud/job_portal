@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Iframe apply inner</title>
+  </head>
+  <body>
+    <form>
+      <label for="phone">Phone number</label>
+      <input id="phone" name="phone" type="tel" required />
+      <button id="final-submit" type="submit">Submit application</button>
+      <div id="submission-status"></div>
+    </form>
+    <script>
+      document.querySelector("form").addEventListener("submit", (event) => {
+        event.preventDefault();
+        document.getElementById("submission-status").textContent = "Application submitted";
+      });
+    </script>
+  </body>
+</html>

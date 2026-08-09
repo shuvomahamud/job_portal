@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Multi-step apply fixture</title>
+  </head>
+  <body>
+    <button id="start-apply" type="button">Apply</button>
+    <form id="step-1">
+      <label for="first-name">First name</label>
+      <input id="first-name" name="first_name" required />
+      <button id="continue" type="button" data-advance>Continue</button>
+    </form>
+    <form id="step-2" hidden>
+      <label for="email">Email address</label>
+      <input id="email" name="email" type="email" required />
+      <button id="final-submit" type="submit" data-terminal-submit>Submit application</button>
+      <div id="submission-status" role="status"></div>
+    </form>
+    <script>
+      document.getElementById("start-apply").addEventListener("click", () => {
+        document.getElementById("start-apply").hidden = true;
+      });
+      document.getElementById("continue").addEventListener("click", () => {
+        document.getElementById("step-1").hidden = true;
+        document.getElementById("step-2").hidden = false;
+      });
+      document.getElementById("step-2").addEventListener("submit", (event) => {
+        event.preventDefault();
+        document.getElementById("submission-status").textContent =
+          "Application submitted. Thanks for applying.";
+      });
+    </script>
+  </body>
+</html>

@@ -140,6 +140,7 @@ export function detectFieldBasesInPage(): FieldBase[] {
 
   function isVisible(element: HTMLElement): boolean {
     if (element.hidden || element.getAttribute("aria-hidden") === "true") return false;
+    if (element.closest("[hidden]")) return false;
     const style = getComputedStyle(element);
     if (
       style.display === "none" ||

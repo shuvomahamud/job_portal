@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { ClaimGuard } from "./claimHeartbeat";
 import { addCommandEvent } from "./db";
+import { handleApplyToJobs } from "./handlers/applyToJobs";
 import { handleDiscoverJobsBrowser } from "./handlers/discoverJobsBrowser";
 import { handleFindMatchingJobs } from "./handlers/findMatchingJobs";
 import { handleImportJobs } from "./handlers/importJobs";
@@ -18,6 +19,7 @@ const phase2Handlers: Record<string, CommandHandler> = {
   run_job_search: handleRunJobSearch,
   run_local_llm_extraction: handleRunLocalLlmExtraction,
   sync_resume_text: handleSyncResumeText,
+  apply_to_jobs: handleApplyToJobs,
 };
 
 export function supportedPhase2CommandTypes() {

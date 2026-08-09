@@ -1,0 +1,151 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import {
+  decideFieldAction,
+  effectiveMode,
+} from "../src/apply/applyPolicy";
+import type { DetectedField, SavedAnswer } from "../src/formfill/types";
+import { isBlockedFromRetry } from "../src/apply/applyRunner";
+import {
+  betweenApplicationsMs,
+  interFieldDelayMs,
+  preSubmitDelayMs,
+  readingDelayMs,
+  typingDelayMs,
+} from "../src/apply/humanInput";
+import { isExternalAts, sourceUrlAllowed } from "../src/apply/applySteps";
+
+function field(overrides: Partial<DetectedField> = {}): DetectedField {
+  return {
+    id: "f1",
+    selector: "#email",
+    tagName: "input",
+    inputType: "email",
+    labelText: "Email",
+    normalizedQuestion: "email",
+    placeholder: "",
+    ariaLabel: "",
+    name: "email",
+    idAttribute: "email",
+    required: true,
+    options: [],
+    currentValue: "",
+    nearbyText: "",
+    fieldCategory: "email",
+    riskLevel: "LOW",
+    confidence: 0.99,
+    ...overrides,
+  };
+}
+
+function answer(overrides: Partial<SavedAnswer> = {}): SavedAnswer {
+  return {
+    id: "a1",
+    normalizedQuestion: "email",
+    originalQuestion: "Email",
+    category: "email",
+    answerValue: "a@example.com",
+    answerType: "text",
+    sitePattern: "",
+    domain: "",
+    usageCount: 0,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    riskLevel: "LOW",
+    notes: "",
+    aliases: [],
+    ...overrides,
+  };
+}
+
+test("effectiveMode clamps requested mode to the configured ceiling", () => {
+  assert.equal(effectiveMode("fill_and_submit", "dry_run"), "dry_run");
+  assert.equal(effectiveMode("fill_only", "fill_and_submit"), "fill_only");
+  assert.equal(effectiveMode(undefined, "fill_only"), "fill_only");
+});
+
+test("decideFieldAction skips file uploads", () => {
+  const action = decideFieldAction({
+    field: field({ inputType: "file", fieldCategory: "resume_upload" }),
+    trustLlmAnswers: false,
+  });
+  assert.equal(action.kind, "skip");
+});
+
+test("decideFieldAction asks for sensitive categories without exact matches", () => {
+  const action = decideFieldAction({
+    field: field({
+      fieldCategory: "sponsorship_required",
+      riskLevel: "MEDIUM",
+      labelText: "Need sponsorship?",
+      normalizedQuestion: "sponsorship",
+      inputType: "select",
+    }),
+    match: {
+      fieldId: "f1",
+      savedAnswerId: "a1",
+      matchType: "ollama",
+      confidence: 0.99,
+      reason: "x",
+      requiresReview: true,
+    },
+    savedAnswer: answer({
+      category: "sponsorship_required",
+      answerValue: "No",
+    }),
+    suggestedValue: "No",
+    trustLlmAnswers: true,
+  });
+  assert.equal(action.kind, "ask");
+});
+
+test("decideFieldAction fills exact low-risk matches", () => {
+  const action = decideFieldAction({
+    field: field(),
+    match: {
+      fieldId: "f1",
+      savedAnswerId: "a1",
+      matchType: "exact",
+      confidence: 0.99,
+      reason: "exact",
+      requiresReview: false,
+    },
+    savedAnswer: answer(),
+    suggestedValue: "a@example.com",
+    trustLlmAnswers: false,
+  });
+  assert.equal(action.kind, "fill");
+  if (action.kind === "fill") assert.equal(action.value, "a@example.com");
+});
+
+test("seeded human delays stay in documented ranges", () => {
+  const rng = () => 0;
+  assert.equal(typingDelayMs(rng), 45);
+  assert.equal(interFieldDelayMs(rng), 700);
+  assert.equal(preSubmitDelayMs(rng), 3000);
+  assert.equal(readingDelayMs(180, rng) <= 12_000, true);
+  assert.equal(betweenApplicationsMs(90, 420, rng), 90_000);
+});
+
+test("external ATS detection and source URL allow-list", () => {
+  assert.equal(isExternalAts("https://boards.greenhouse.io/x", ["indeed.com"]).external, true);
+  assert.equal(sourceUrlAllowed("indeed", "https://www.indeed.com/viewjob?jk=1"), true);
+  assert.equal(sourceUrlAllowed("indeed", "https://linkedin.com/jobs/1"), false);
+  assert.equal(sourceUrlAllowed("fixture", "file:///tmp/form.html"), true);
+});
+
+const BLOCKED_RETRY_STATUSES = new Set([
+  "submitting",
+  "submission_unknown",
+  "applied",
+  "screening",
+  "interview",
+  "offer",
+]);
+
+test("submission_unknown is not retried by a subsequent apply cycle", () => {
+  assert.equal(isBlockedFromRetry("submission_unknown"), true);
+  assert.equal(isBlockedFromRetry("draft"), false);
+  assert.equal(isBlockedFromRetry("awaiting_answer"), false);
+  assert.equal(BLOCKED_RETRY_STATUSES.has("submission_unknown"), true);
+});
