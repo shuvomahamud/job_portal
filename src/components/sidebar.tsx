@@ -9,6 +9,7 @@ import {
   CircleGauge,
   FileInput,
   Layers3,
+  MessageCircleQuestion,
   Settings,
   UserRound,
 } from "lucide-react";
@@ -19,6 +20,7 @@ const navItems = [
   { href: "/", label: "Overview", icon: CircleGauge },
   { href: "/jobs", label: "Jobs", icon: BriefcaseBusiness },
   { href: "/roles", label: "Roles", icon: Layers3 },
+  { href: "/questions", label: "Questions", icon: MessageCircleQuestion },
   { href: "/import", label: "Import", icon: FileInput },
   { href: "/profile", label: "Profile hub", icon: UserRound },
   { href: "/follow-ups", label: "Follow-ups", icon: CalendarClock },

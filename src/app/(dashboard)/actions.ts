@@ -9,6 +9,7 @@ import {
   commandEvents,
   commonAnswers,
   followups,
+  pendingQuestions,
   resumeVersions,
   targetRoles,
 } from "@/db/schema";
@@ -355,4 +356,54 @@ export async function queueResumeTextSync(resumeVersionId?: string) {
   revalidatePath("/roles");
   revalidatePath("/profile");
   revalidatePath("/commands");
+}
+
+export async function answerPendingQuestion(formData: FormData) {
+  const user = await requireDashboardUser();
+  const questionId = z.uuid().parse(requiredString(formData, "questionId"));
+  const answer = requiredString(formData, "answer");
+  const db = getDb();
+  const [question] = await db
+    .select()
+    .from(pendingQuestions)
+    .where(
+      and(
+        eq(pendingQuestions.id, questionId),
+        eq(pendingQuestions.userId, user.id),
+        eq(pendingQuestions.status, "open"),
+      ),
+    )
+    .limit(1);
+  if (!question) throw new Error("Question not found or already answered.");
+
+  const { acceptPendingAnswer } = await import("@/services/pendingAnswers");
+  const result = await acceptPendingAnswer({
+    question,
+    rawAnswer: answer,
+    source: "dashboard",
+  });
+  if (!result.ok) throw new Error(result.message);
+  revalidatePath("/questions");
+  revalidatePath("/commands");
+}
+
+export async function dismissPendingQuestion(formData: FormData) {
+  const user = await requireDashboardUser();
+  const questionId = z.uuid().parse(requiredString(formData, "questionId"));
+  await getDb()
+    .update(pendingQuestions)
+    .set({
+      status: "dismissed",
+      answeredBy: "dashboard",
+      answeredAt: new Date(),
+      updatedAt: new Date(),
+    })
+    .where(
+      and(
+        eq(pendingQuestions.id, questionId),
+        eq(pendingQuestions.userId, user.id),
+        eq(pendingQuestions.status, "open"),
+      ),
+    );
+  revalidatePath("/questions");
 }

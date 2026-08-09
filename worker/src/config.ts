@@ -59,6 +59,11 @@ const envSchema = z.object({
   OPENAI_REVIEW_REASONING_EFFORT: z.enum(["low", "medium", "high"]).default("medium"),
   OPENAI_REVIEW_TIMEOUT_MS: intFromEnv(90000, 1000, 180000),
   REMOTE_AI_REVIEW_MAX_PER_RUN: intFromEnv(5, 0, 50),
+  TELEGRAM_BOT_TOKEN: z.string().trim().min(1).optional(),
+  TELEGRAM_ALLOWED_CHAT_ID: z.string().trim().min(1).optional(),
+  TELEGRAM_WEBHOOK_SECRET: z.string().trim().min(8).optional(),
+  JOB_APPLY_NOTIFY_CHANNEL: z.enum(["telegram", "dashboard"]).default("dashboard"),
+  JOB_APPLY_QUESTION_TTL_HOURS: intFromEnv(72, 1, 720),
 });
 
 export type WorkerConfig = z.infer<typeof envSchema> & {

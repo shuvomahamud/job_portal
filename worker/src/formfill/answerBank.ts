@@ -1,4 +1,5 @@
 import { and, eq, inArray, sql } from "drizzle-orm";
+import type { NeonHttpDatabase } from "drizzle-orm/neon-http";
 import * as schema from "../../../src/db/schema";
 import { getWorkerDb } from "../db";
 import { normalizeQuestion } from "./questionNormalizer";
@@ -6,6 +7,12 @@ import { getRiskLevel } from "./riskPolicy";
 import { FIELD_CATEGORIES, type DetectedField, type FieldCategory, type SavedAnswer } from "./types";
 
 export type AnswerScope = "global" | "company" | "job";
+
+type AnswerDb = NeonHttpDatabase<typeof schema>;
+
+function dbOrDefault(database?: AnswerDb): AnswerDb {
+  return database ?? getWorkerDb();
+}
 
 export type AnswerBankProfile = {
   firstName?: string | null;
@@ -182,31 +189,34 @@ export function chooseAnswerScope(
   return { scope: "global", scopeKey: "" };
 }
 
-export async function loadAnswerBank(input: {
-  userId: string;
-  jobId: string;
-  company: string;
-  domain: string;
-}): Promise<SavedAnswer[]> {
-  const database = getWorkerDb();
+export async function loadAnswerBank(
+  input: {
+    userId: string;
+    jobId: string;
+    company: string;
+    domain: string;
+  },
+  database?: AnswerDb,
+): Promise<SavedAnswer[]> {
+  const db = dbOrDefault(database);
   const companyKey = input.company.trim().toLowerCase();
 
   const [answerRows, commonRows, profile, user] = await Promise.all([
-    database
+    db
       .select()
       .from(schema.applicationAnswers)
       .where(eq(schema.applicationAnswers.userId, input.userId)),
-    database
+    db
       .select()
       .from(schema.commonAnswers)
       .where(eq(schema.commonAnswers.userId, input.userId)),
-    database
+    db
       .select()
       .from(schema.candidateProfiles)
       .where(eq(schema.candidateProfiles.userId, input.userId))
       .limit(1)
       .then((rows) => rows[0] ?? null),
-    database
+    db
       .select({ email: schema.users.email })
       .from(schema.users)
       .where(eq(schema.users.id, input.userId))
@@ -240,16 +250,19 @@ export async function loadAnswerBank(input: {
   });
 }
 
-export async function learnAnswer(input: {
-  userId: string;
-  scope: AnswerScope;
-  scopeKey: string;
-  field: DetectedField;
-  answerValue: string;
-  domain: string;
-  source: "user_reply" | "dashboard";
-}): Promise<void> {
-  const database = getWorkerDb();
+export async function learnAnswer(
+  input: {
+    userId: string;
+    scope: AnswerScope;
+    scopeKey: string;
+    field: DetectedField;
+    answerValue: string;
+    domain: string;
+    source: "user_reply" | "dashboard";
+  },
+  database?: AnswerDb,
+): Promise<void> {
+  const db = dbOrDefault(database);
   const now = new Date();
   const normalizedQuestion = input.field.normalizedQuestion || normalizeQuestion(input.field.labelText);
   const answerType =
@@ -263,7 +276,7 @@ export async function learnAnswer(input: {
             ? "checkbox"
             : "text";
 
-  const upsert = database
+  const upsert = db
     .insert(schema.applicationAnswers)
     .values({
       userId: input.userId,
@@ -304,7 +317,7 @@ export async function learnAnswer(input: {
       },
     });
 
-  const markPending = database
+  const markPending = db
     .update(schema.pendingQuestions)
     .set({
       status: "answered",
@@ -321,15 +334,15 @@ export async function learnAnswer(input: {
       ),
     );
 
-  await database.batch([upsert, markPending]);
+  await db.batch([upsert, markPending]);
 }
 
-export async function markAnswersUsed(ids: string[]): Promise<void> {
+export async function markAnswersUsed(ids: string[], database?: AnswerDb): Promise<void> {
   const realIds = ids.filter((id) => !id.startsWith("profile:") && !id.startsWith("common:"));
   if (!realIds.length) return;
-  const database = getWorkerDb();
+  const db = dbOrDefault(database);
   const now = new Date();
-  await database
+  await db
     .update(schema.applicationAnswers)
     .set({
       usageCount: sql`${schema.applicationAnswers.usageCount} + 1`,
