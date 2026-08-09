@@ -4,7 +4,7 @@ import * as schema from "../../../src/db/schema";
 import type { BrowserContextLike, PageLike } from "../browser/playwrightTypes";
 import { getConfig, sleep } from "../config";
 import { addCommandEvent, getCommandStatus, getWorkerDb } from "../db";
-import { loadAnswerBank } from "../formfill/answerBank";
+import { loadAnswerBank, markAnswersUsed } from "../formfill/answerBank";
 import {
   detectFields,
   expandComboboxOptions,
@@ -537,6 +537,7 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
 
       const fingerprint = fieldFingerprint(fields, frame.url());
       const asks: Array<{ field: DetectedField; reason: string }> = [];
+      const usedAnswerIds: string[] = [];
 
       for (const field of fields) {
         const suggestion = buildSuggestion(field, answers);
@@ -594,7 +595,20 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
         }
 
         await fillDetectedField(frame, field, action.value, human);
+        if (suggestion.savedAnswer) usedAnswerIds.push(suggestion.savedAnswer.id);
         await sleep(fixture ? 10 : interFieldDelayMs(random));
+      }
+
+      // Reuse counters are diagnostic only — never let them fail an application.
+      if (usedAnswerIds.length) {
+        try {
+          await markAnswersUsed(usedAnswerIds);
+        } catch (error) {
+          logger.warn("Could not update answer reuse counters", {
+            commandId: input.commandId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
       }
 
       const stepScreenshotPath = await screenshot(artifactCtx, `step-${step}`);

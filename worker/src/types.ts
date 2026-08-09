@@ -16,6 +16,7 @@ export type CommandType =
   | "reprocess_job"
   | "run_apply_cycle"
   | "apply_to_jobs"
+  | "verify_submission"
   | "sync_resume_text";
 
 export type WorkerSpawnableCommandType =

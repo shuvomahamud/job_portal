@@ -6,7 +6,6 @@ import { optionMatches } from "../formfill/optionMatching";
 import type {
   AnswerMatch,
   DetectedField,
-  FieldCategory,
   MatchType,
   SavedAnswer,
 } from "../formfill/types";
@@ -114,22 +113,4 @@ export function decideFieldAction(input: DecideFieldInput): FieldAction {
   }
 
   return { kind: "skip", reason: "Optional field with no answer." };
-}
-
-export function isIdentityCategory(category: FieldCategory): boolean {
-  return [
-    "first_name",
-    "last_name",
-    "full_name",
-    "email",
-    "phone",
-    "address",
-    "city",
-    "state",
-    "zip",
-    "country",
-    "linkedin",
-    "github",
-    "portfolio",
-  ].includes(category);
 }
