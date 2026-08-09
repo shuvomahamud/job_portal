@@ -1,6 +1,7 @@
 import { z } from "zod";
 import {
   APPLICATION_STATUSES,
+  APPLY_MODES,
   AUTOMATED_JOB_SOURCES,
   COMMAND_TYPES,
   FOLLOWUP_STATUSES,
@@ -92,6 +93,7 @@ export const commandPayloadSchemas = {
       queries: z.array(z.string().trim().min(1).max(200)).min(1).max(10),
       locations: z.array(z.string().trim().min(1).max(200)).min(1).max(10),
       maxResults: z.number().int().min(1).max(50).default(10),
+      targetRoleId: z.uuid().optional(),
     })
     .strict(),
   run_job_search: z
@@ -144,6 +146,8 @@ export const commandPayloadSchemas = {
       model: z.string().trim().min(1).max(100).optional(),
       promptVersion: z.literal("job-match-prompt-v1"),
       policyVersion: z.literal("job-match-policy-v1"),
+      targetRoleId: z.uuid(),
+      resumeVersionId: z.uuid(),
     })
     .strict(),
   review_top_jobs: z
@@ -194,6 +198,29 @@ export const commandPayloadSchemas = {
         .min(1)
         .max(4)
         .optional(),
+    })
+    .strict(),
+  run_apply_cycle: z
+    .object({
+      phase: z.enum(["discover", "apply"]).optional(),
+      maxJobs: z.number().int().min(1).max(50).optional(),
+      mode: z.enum(APPLY_MODES).optional(),
+      matchingCommandIds: z.array(z.uuid()).max(50).optional(),
+      attempt: z.number().int().min(0).max(20).optional(),
+      parentCommandId: z.uuid().optional(),
+    })
+    .strict(),
+  apply_to_jobs: z
+    .object({
+      jobIds: z.array(z.uuid()).min(1).max(10),
+      mode: z.enum(APPLY_MODES).optional(),
+      maxJobs: z.number().int().min(1).max(10).optional(),
+      maxRuntimeMinutes: z.number().int().min(1).max(180).optional(),
+    })
+    .strict(),
+  sync_resume_text: z
+    .object({
+      resumeVersionIds: z.array(z.uuid()).min(1).max(50).optional(),
     })
     .strict(),
 } satisfies Record<(typeof COMMAND_TYPES)[number], z.ZodType>;

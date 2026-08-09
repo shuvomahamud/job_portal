@@ -7,14 +7,19 @@ import { buildCandidateMatchingContext, buildJobMatchingContext, fingerprintCand
 import { getConfig } from "../config";
 import {
   addCommandEvent,
-  applyMatchDecision,
   findReusableMatchReview,
+  getBestEligibleRoleMatches,
   getCandidateProfileById,
   getCommandById,
   getCommandStatus,
   getJobsByIds,
-  persistMatchReviewAndDecision,
+  getResumeVersionForUser,
+  getTargetRoleForUser,
+  persistMatchReview,
+  upsertJobRoleMatch,
 } from "../db";
+import { requireCommandUserId } from "../requireCommandUserId";
+import { isResumeHealthyForActivation } from "../../../src/lib/resumeHealth";
 import type { HandlerContext, HandlerResult } from "../types";
 
 const payloadSchema = z
@@ -25,6 +30,8 @@ const payloadSchema = z
     model: z.string().trim().min(1).max(100).optional(),
     promptVersion: z.literal("job-match-prompt-v1"),
     policyVersion: z.literal("job-match-policy-v1"),
+    targetRoleId: z.uuid(),
+    resumeVersionId: z.uuid(),
   })
   .strict();
 
@@ -70,6 +77,7 @@ function reviewMetadata(input: {
   providerSucceeded: boolean;
   evidence: JobMatchEvidence;
   decision: JobMatchDecision;
+  resumeVersionId?: string | null;
 }) {
   return {
     schemaVersion: "job-match-v1" as const,
@@ -87,6 +95,7 @@ function reviewMetadata(input: {
     providerSucceeded: input.providerSucceeded,
     evidence: input.evidence,
     decision: input.decision,
+    resumeVersionId: input.resumeVersionId ?? null,
   };
 }
 
@@ -98,14 +107,31 @@ function cachedEvidence(review: { rawOutput: Record<string, unknown> | null }) {
   return { evidence: evidence.data, decision: decideJobMatch(evidence.data) };
 }
 
+function roleMatchStatus(decision: JobMatchDecision): "match" | "uncertain" | "reject" {
+  return decision.recommendation;
+}
+
 export async function handleRunLocalLlmExtraction(payload: unknown, context: HandlerContext): Promise<HandlerResult> {
   const input = payloadSchema.parse(payload);
   const cfg = getConfig();
+  const userId = requireCommandUserId(context.command.requestedBy);
   const parent = await getCommandById(input.parentCommandId);
   if (!parent || parent.type !== "find_matching_jobs") throw new Error("Local matching command has no valid matching-run parent.");
   if (parent.requestedBy !== context.command.requestedBy) throw new Error("Local matching command ownership does not match its parent.");
   const profile = await getCandidateProfileById(input.candidateProfileId, context.command.requestedBy);
   if (!profile) throw new Error("Matching candidate profile was not found for this command.");
+
+  const role = await getTargetRoleForUser(input.targetRoleId, userId);
+  if (!role) throw new Error("Matching target role was not found for this command.");
+  if (!role.active) throw new Error("Matching target role is no longer active.");
+  if (input.resumeVersionId !== role.resumeVersionId) {
+    throw new Error("Matching resume does not match the target role's configured resume.");
+  }
+  const resumeVersionId = role.resumeVersionId;
+  const resume = await getResumeVersionForUser(resumeVersionId, userId);
+  if (!resume?.resumeText || !isResumeHealthyForActivation(resume)) {
+    throw new Error("Matching target role does not have healthy extracted resume text.");
+  }
 
   const localProvider = new OllamaJobMatchProvider({
     baseUrl: cfg.OLLAMA_BASE_URL,
@@ -122,7 +148,11 @@ export async function handleRunLocalLlmExtraction(payload: unknown, context: Han
         requestTimeoutMs: cfg.OPENAI_REVIEW_TIMEOUT_MS,
       })
     : null;
-  const candidate = buildCandidateMatchingContext(profile);
+  const candidate = buildCandidateMatchingContext(profile, {
+    roleTitle: role.title,
+    locations: role.locations,
+    resumeText: resume.resumeText,
+  });
   const profileFingerprint = fingerprintCandidate(candidate);
   const jobs = await getJobsByIds(input.jobIds);
   const byId = new Map(jobs.map((job) => [job.id, job]));
@@ -138,9 +168,15 @@ export async function handleRunLocalLlmExtraction(payload: unknown, context: Han
     parentCommandId: input.parentCommandId,
     model: localProvider.model,
     jobCount: input.jobIds.length,
+    targetRoleId: role.id,
+    resumeVersionId,
   });
 
   for (const jobId of input.jobIds) {
+    if (context.claimGuard.lost) {
+      warnings.push("Matching stopped because the worker claim was lost.");
+      break;
+    }
     const rootStatus = await getCommandStatus(input.parentCommandId);
     const childStatus = await getCommandStatus(context.command.id);
     if (rootStatus === "canceled" || childStatus === "canceled") {
@@ -153,10 +189,6 @@ export async function handleRunLocalLlmExtraction(payload: unknown, context: Han
       warnings.push(`Job ${jobId} was no longer available for matching.`);
       continue;
     }
-    if (["applied", "interview", "offer", "rejected"].includes(job.status)) {
-      warnings.push(`${job.title} is already in the application pipeline and was not reclassified.`);
-      continue;
-    }
     const jobContext = buildJobMatchingContext(job, cfg.AI_MATCH_MAX_JOB_DESCRIPTION_CHARS);
     const jobFingerprint = fingerprintJob(jobContext);
     const startedAt = new Date().toISOString();
@@ -165,7 +197,6 @@ export async function handleRunLocalLlmExtraction(payload: unknown, context: Han
       let localEvidence: JobMatchEvidence;
       let localDecision: JobMatchDecision;
       let localAttempt = 0;
-      let finalDecisionPersisted = false;
       const reusableLocal = await findReusableMatchReview({
         jobId,
         provider: "ollama",
@@ -174,6 +205,7 @@ export async function handleRunLocalLlmExtraction(payload: unknown, context: Han
         jobFingerprint,
         promptVersion: input.promptVersion,
         policyVersion: input.policyVersion,
+        resumeVersionId,
       });
       const cachedLocal = reusableLocal ? cachedEvidence(reusableLocal) : null;
       if (cachedLocal) {
@@ -185,7 +217,7 @@ export async function handleRunLocalLlmExtraction(payload: unknown, context: Han
         localDecision = decideJobMatch(localEvidence);
         localAttempt = attempt.attempt;
         if (attempt.error) warnings.push(`Local review for ${job.title} was unavailable: ${attempt.error.message}`);
-        await persistMatchReviewAndDecision({
+        await persistMatchReview({
           job,
           reviewerType: "local_llm",
           metadata: reviewMetadata({
@@ -199,9 +231,9 @@ export async function handleRunLocalLlmExtraction(payload: unknown, context: Han
             providerSucceeded: !attempt.error,
             evidence: localEvidence,
             decision: localDecision,
+            resumeVersionId,
           }),
         });
-        finalDecisionPersisted = true;
       }
 
       let finalEvidence = localEvidence;
@@ -216,17 +248,17 @@ export async function handleRunLocalLlmExtraction(payload: unknown, context: Han
           jobFingerprint,
           promptVersion: input.promptVersion,
           policyVersion: input.policyVersion,
+          resumeVersionId,
         });
         const cachedRemote = reusableRemote ? cachedEvidence(reusableRemote) : null;
         if (cachedRemote) {
           finalEvidence = cachedRemote.evidence;
           finalDecision = cachedRemote.decision;
-          finalDecisionPersisted = false;
         } else {
           const remoteAttempt = await assessWithRetry(remoteProvider, { candidate, job: jobContext }, 1);
           const remoteDecision = decideJobMatch(remoteAttempt.evidence);
           if (remoteAttempt.error) warnings.push(`Remote review for ${job.title} was unavailable: ${remoteAttempt.error.message}`);
-          await persistMatchReviewAndDecision({
+          await persistMatchReview({
             job,
             reviewerType: "codex",
             metadata: reviewMetadata({
@@ -240,17 +272,26 @@ export async function handleRunLocalLlmExtraction(payload: unknown, context: Han
               providerSucceeded: !remoteAttempt.error,
               evidence: remoteAttempt.evidence,
               decision: remoteDecision,
+              resumeVersionId,
             }),
           });
           finalEvidence = remoteAttempt.evidence;
           finalDecision = remoteDecision;
-          finalDecisionPersisted = true;
         }
       }
 
-      if (!finalDecisionPersisted) {
-        await applyMatchDecision(jobId, finalEvidence, finalDecision);
-      }
+      await upsertJobRoleMatch({
+        userId,
+        jobId,
+        targetRoleId: role.id,
+        resumeVersionId,
+        status: roleMatchStatus(finalDecision),
+        score: finalDecision.score,
+        evidenceJson: { evidence: finalEvidence, decision: finalDecision },
+        reasons: finalDecision.reasons,
+        candidateFingerprint: profileFingerprint,
+        jobFingerprint,
+      });
 
       evaluatedCount += 1;
       if (finalDecision.status === "ready_to_apply") matchedJobIds.push(jobId);
@@ -260,6 +301,8 @@ export async function handleRunLocalLlmExtraction(payload: unknown, context: Han
         jobId,
         status: finalDecision.status,
         score: finalDecision.score,
+        recommendation: finalDecision.recommendation,
+        targetRoleId: role.id,
       });
     } catch (error) {
       failedJobIds.push(jobId);
@@ -272,14 +315,25 @@ export async function handleRunLocalLlmExtraction(payload: unknown, context: Han
     }
   }
 
+  const selectedMatches = await getBestEligibleRoleMatches(userId, input.jobIds);
+
   return {
     parentCommandId: input.parentCommandId,
+    targetRoleId: role.id,
+    resumeVersionId,
     evaluatedCount,
     remoteReviewCount,
     matchedJobIds,
     needsReviewJobIds,
     archivedJobIds,
     failedJobIds,
+    selectedMatches: selectedMatches.map((match) => ({
+      jobId: match.jobId,
+      jobRoleMatchId: match.id,
+      targetRoleId: match.targetRoleId,
+      resumeVersionId: match.resumeVersionId,
+      score: match.score,
+    })),
     warnings,
   };
 }

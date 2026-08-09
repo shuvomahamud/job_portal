@@ -39,6 +39,8 @@ const payloadExamples: Record<(typeof COMMAND_TYPES)[number], object> = {
     jobIds: ["00000000-0000-4000-8000-000000000000"],
     promptVersion: "job-match-prompt-v1",
     policyVersion: "job-match-policy-v1",
+    targetRoleId: "00000000-0000-4000-8000-000000000000",
+    resumeVersionId: "00000000-0000-4000-8000-000000000000",
   },
   review_top_jobs: { limit: 10, minimumFitScore: 75 },
   review_job: {
@@ -59,6 +61,16 @@ const payloadExamples: Record<(typeof COMMAND_TYPES)[number], object> = {
     jobId: "00000000-0000-4000-8000-000000000000",
     stages: ["normalize", "extract"],
   },
+  run_apply_cycle: {
+    phase: "discover",
+    maxJobs: 5,
+    mode: "dry_run",
+  },
+  apply_to_jobs: {
+    jobIds: ["00000000-0000-4000-8000-000000000000"],
+    mode: "dry_run",
+  },
+  sync_resume_text: {},
 };
 
 export function CommandComposer() {

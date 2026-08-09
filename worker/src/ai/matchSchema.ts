@@ -72,6 +72,8 @@ export type CandidateMatchingContext = {
   summary: string;
   dealBreakers: string[];
   matchingInstructions: string | null;
+  roleTitle: string;
+  resumeText: string;
 };
 
 export type JobMatchingContext = {

@@ -3,7 +3,7 @@ import { drizzle } from "drizzle-orm/neon-http";
 import { and, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import * as schema from "../../src/db/schema";
 import { getConfig } from "./config";
-import type { NormalizedJobInput } from "./types";
+import type { NormalizedJobInput, WorkerSpawnableCommandType } from "./types";
 import type { RuleFilterResult } from "./rules/ruleEngine";
 import type { JobMatchDecision } from "./ai/matchPolicy";
 import type { JobMatchEvidence } from "./ai/matchSchema";
@@ -88,12 +88,25 @@ export async function recoverStaleClaims(maxClaimAgeMinutes = 60) {
   const database = getWorkerDb();
   const result = await database.execute(sql`
     UPDATE commands
-    SET status = 'pending', claimed_by = NULL, claimed_at = NULL, updated_at = NOW(), error_message = 'Recovered from stale worker claim.'
+    SET status = 'pending', claimed_by = NULL, claimed_at = NULL, heartbeat_at = NULL, updated_at = NOW(), error_message = 'Recovered from stale worker claim.'
     WHERE status = 'claimed'
-      AND claimed_at < NOW() - (${maxClaimAgeMinutes} || ' minutes')::interval
+      AND COALESCE(heartbeat_at, claimed_at) < NOW() - (${maxClaimAgeMinutes} || ' minutes')::interval
     RETURNING id
   `);
   return result.rows.map((row) => String((row as { id: unknown }).id));
+}
+
+export async function heartbeatCommand(commandId: string, workerId: string): Promise<boolean> {
+  const database = getWorkerDb();
+  const result = await database.execute(sql`
+    UPDATE commands
+    SET heartbeat_at = NOW(), updated_at = NOW()
+    WHERE id = ${commandId}
+      AND claimed_by = ${workerId}
+      AND status = 'claimed'
+    RETURNING id
+  `);
+  return result.rows.length > 0;
 }
 
 export async function getJobsForPhase2(limit = 100) {
@@ -207,10 +220,11 @@ export async function getCommandById(commandId: string) {
 
 export async function createWorkerChildCommand(input: {
   parentCommandId: string;
-  type: "run_local_llm_extraction";
+  type: WorkerSpawnableCommandType;
   requestedBy: string;
   payloadJson: Record<string, unknown>;
   priority?: "low" | "normal" | "high" | "urgent";
+  scheduledFor?: Date;
 }) {
   const database = getWorkerDb();
   const [command] = await database
@@ -222,10 +236,12 @@ export async function createWorkerChildCommand(input: {
       requestedBy: input.requestedBy,
       payloadJson: input.payloadJson,
       priority: input.priority ?? "normal",
-      scheduledFor: new Date(),
+      scheduledFor: input.scheduledFor ?? new Date(),
     })
     .returning();
   if (!command) throw new Error("Could not create child command.");
+  const queuedEventType =
+    input.type === "run_local_llm_extraction" ? "matching_queued" : `${input.type}_queued`;
   await database.insert(schema.commandEvents).values([
     {
       commandId: command.id,
@@ -235,8 +251,8 @@ export async function createWorkerChildCommand(input: {
     },
     {
       commandId: input.parentCommandId,
-      eventType: "matching_queued",
-      message: "Local AI matching was queued on the Mac worker.",
+      eventType: queuedEventType,
+      message: `Child ${input.type} command was queued.`,
       metadataJson: { childCommandId: command.id, type: input.type },
     },
   ]);
@@ -269,6 +285,7 @@ export async function findReusableMatchReview(input: {
   jobFingerprint: string;
   promptVersion: "job-match-prompt-v1";
   policyVersion: "job-match-policy-v1";
+  resumeVersionId?: string | null;
 }) {
   const rows = await getWorkerDb()
     .select()
@@ -277,7 +294,9 @@ export async function findReusableMatchReview(input: {
     .orderBy(desc(schema.jobReviews.createdAt))
     .limit(30);
   return rows.find((row) => {
-    const raw = row.rawOutput as Partial<MatchReviewMetadata> | null;
+    const raw = row.rawOutput as (Partial<MatchReviewMetadata> & { resumeVersionId?: string | null }) | null;
+    const resumeMatches =
+      (input.resumeVersionId ?? null) === (raw?.resumeVersionId ?? null);
     return (
       raw?.schemaVersion === "job-match-v1" &&
       raw.provider === input.provider &&
@@ -286,63 +305,155 @@ export async function findReusableMatchReview(input: {
       raw.jobFingerprint === input.jobFingerprint &&
       raw.promptVersion === input.promptVersion &&
       raw.policyVersion === input.policyVersion &&
-      raw.providerSucceeded === true
+      raw.providerSucceeded === true &&
+      resumeMatches
     );
   }) ?? null;
 }
 
-export async function persistMatchReviewAndDecision(input: {
+export async function upsertJobRoleMatch(input: {
+  userId: string;
+  jobId: string;
+  targetRoleId: string;
+  resumeVersionId: string | null;
+  status: "match" | "uncertain" | "reject";
+  score: number | null;
+  evidenceJson: Record<string, unknown> | null;
+  reasons: string[];
+  candidateFingerprint: string | null;
+  jobFingerprint: string | null;
+}) {
+  const [row] = await getWorkerDb()
+    .insert(schema.jobRoleMatches)
+    .values({
+      userId: input.userId,
+      jobId: input.jobId,
+      targetRoleId: input.targetRoleId,
+      resumeVersionId: input.resumeVersionId,
+      status: input.status,
+      score: input.score,
+      evidenceJson: input.evidenceJson,
+      reasons: input.reasons,
+      candidateFingerprint: input.candidateFingerprint,
+      jobFingerprint: input.jobFingerprint,
+    })
+    .onConflictDoUpdate({
+      target: [
+        schema.jobRoleMatches.userId,
+        schema.jobRoleMatches.jobId,
+        schema.jobRoleMatches.targetRoleId,
+      ],
+      set: {
+        resumeVersionId: input.resumeVersionId,
+        status: input.status,
+        score: input.score,
+        evidenceJson: input.evidenceJson,
+        reasons: input.reasons,
+        candidateFingerprint: input.candidateFingerprint,
+        jobFingerprint: input.jobFingerprint,
+        updatedAt: new Date(),
+      },
+    })
+    .returning();
+  return row;
+}
+
+export async function getActiveTargetRolesForUser(userId: string) {
+  return getWorkerDb()
+    .select()
+    .from(schema.targetRoles)
+    .where(and(eq(schema.targetRoles.userId, userId), eq(schema.targetRoles.active, true)));
+}
+
+export async function getTargetRoleForUser(roleId: string, userId: string) {
+  const [row] = await getWorkerDb()
+    .select()
+    .from(schema.targetRoles)
+    .where(and(eq(schema.targetRoles.id, roleId), eq(schema.targetRoles.userId, userId)))
+    .limit(1);
+  return row ?? null;
+}
+
+export async function getResumeVersionForUser(resumeVersionId: string, userId: string) {
+  const [row] = await getWorkerDb()
+    .select()
+    .from(schema.resumeVersions)
+    .where(
+      and(eq(schema.resumeVersions.id, resumeVersionId), eq(schema.resumeVersions.userId, userId)),
+    )
+    .limit(1);
+  return row ?? null;
+}
+
+export async function persistMatchReview(input: {
   job: typeof schema.jobs.$inferSelect;
   reviewerType: "local_llm" | "codex";
   metadata: MatchReviewMetadata;
 }) {
-  const database = getWorkerDb();
-  const [reviewRows, jobRows] = await database.batch([
-    database
-      .insert(schema.jobReviews)
-      .values({
-        jobId: input.job.id,
-        reviewerType: input.reviewerType,
-        score: input.metadata.decision.score,
-        recommendation: input.metadata.decision.recommendation,
-        strengths: input.metadata.evidence.matchedEvidence.map((item) => item.evidence).slice(0, 12),
-        gaps: input.metadata.evidence.gaps.map((item) => item.evidence).slice(0, 12),
-        visaNotes: input.metadata.evidence.visaNotes,
-        resumeAngle: input.metadata.evidence.resumeAngle,
-        rawOutput: input.metadata,
-      })
-      .returning(),
-    database
-      .update(schema.jobs)
-      .set(matchDecisionValues(input.metadata.evidence, input.metadata.decision))
-      .where(eq(schema.jobs.id, input.job.id))
-      .returning(),
-  ]);
-  return { review: reviewRows[0], job: jobRows[0] };
-}
-
-function matchDecisionValues(evidence: JobMatchEvidence, decision: JobMatchDecision) {
-  return {
-    status: decision.status,
-    fitScore: decision.score,
-    priority: decision.priority,
-    visaSignal: decision.visaSignal,
-    notes: `AI match: ${evidence.summary} ${decision.reasons.join(" ")}`.slice(0, 20_000),
-    updatedAt: new Date(),
-  };
-}
-
-export async function applyMatchDecision(
-  jobId: string,
-  evidence: JobMatchEvidence,
-  decision: JobMatchDecision,
-) {
-  const [job] = await getWorkerDb()
-    .update(schema.jobs)
-    .set(matchDecisionValues(evidence, decision))
-    .where(eq(schema.jobs.id, jobId))
+  const [review] = await getWorkerDb()
+    .insert(schema.jobReviews)
+    .values({
+      jobId: input.job.id,
+      reviewerType: input.reviewerType,
+      score: input.metadata.decision.score,
+      recommendation: input.metadata.decision.recommendation,
+      strengths: input.metadata.evidence.matchedEvidence
+        .map((item) => item.evidence)
+        .slice(0, 12),
+      gaps: input.metadata.evidence.gaps
+        .map((item) => item.evidence)
+        .slice(0, 12),
+      visaNotes: input.metadata.evidence.visaNotes,
+      resumeAngle: input.metadata.evidence.resumeAngle,
+      rawOutput: input.metadata,
+    })
     .returning();
-  return job ?? null;
+  return review ?? null;
+}
+
+type EligibleRoleMatch = Pick<
+  typeof schema.jobRoleMatches.$inferSelect,
+  "id" | "jobId" | "targetRoleId" | "resumeVersionId" | "status" | "score"
+>;
+
+export function chooseBestEligibleRoleMatch<T extends EligibleRoleMatch>(
+  matches: readonly T[],
+): T | null {
+  return [...matches]
+    .filter((match) => match.status === "match" && match.resumeVersionId)
+    .sort((left, right) => {
+      const scoreDifference = (right.score ?? -1) - (left.score ?? -1);
+      if (scoreDifference !== 0) return scoreDifference;
+      return left.id.localeCompare(right.id);
+    })[0] ?? null;
+}
+
+export async function getBestEligibleRoleMatches(
+  userId: string,
+  jobIds: string[],
+) {
+  if (!jobIds.length) return [];
+  const rows = await getWorkerDb()
+    .select()
+    .from(schema.jobRoleMatches)
+    .where(
+      and(
+        eq(schema.jobRoleMatches.userId, userId),
+        eq(schema.jobRoleMatches.status, "match"),
+        inArray(schema.jobRoleMatches.jobId, jobIds),
+      ),
+    )
+    .orderBy(schema.jobRoleMatches.jobId, desc(schema.jobRoleMatches.score));
+
+  const grouped = new Map<string, typeof rows>();
+  for (const row of rows) {
+    const matches = grouped.get(row.jobId) ?? [];
+    matches.push(row);
+    grouped.set(row.jobId, matches);
+  }
+  return [...grouped.values()]
+    .map(chooseBestEligibleRoleMatch)
+    .filter((match): match is NonNullable<typeof match> => Boolean(match));
 }
 
 export async function archiveJobFromHardFilter(input: {

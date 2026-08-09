@@ -7,8 +7,9 @@ import {
   humanDelayMs,
   type BrowserDiscoverySource,
 } from "../search/browserDiscovery";
-import { prepareManagedCdpBrowser, type CdpCleanupResult } from "../search/cdpBrowser";
 import { extractJobDetail } from "../search/jobDetailExtraction";
+import { loadPlaywright, openBrowserSession } from "../browser/session";
+import type { PageLike } from "../browser/playwrightTypes";
 import { logger } from "../logger";
 import type { HandlerContext, HandlerResult } from "../types";
 
@@ -32,32 +33,6 @@ const payloadSchema = z.object({
   dryRun: z.boolean().default(false).optional(),
   initialStatus: z.enum(["new", "reviewing"]).default("new").optional(),
 }).strict();
-
-type PlaywrightModule = {
-  chromium: {
-    launchPersistentContext: (userDataDir: string, options: Record<string, unknown>) => Promise<BrowserContextLike>;
-    connectOverCDP: (endpointURL: string, options?: Record<string, unknown>) => Promise<BrowserLike>;
-  };
-};
-
-type BrowserLike = {
-  contexts: () => BrowserContextLike[];
-  newContext: (options: Record<string, unknown>) => Promise<BrowserContextLike>;
-  disconnect?: () => Promise<void> | void;
-  close: () => Promise<void>;
-};
-
-type BrowserContextLike = {
-  newPage: () => Promise<PageLike>;
-  close: () => Promise<void>;
-};
-
-type PageLike = {
-  goto: (url: string, options: Record<string, unknown>) => Promise<unknown>;
-  content: () => Promise<string>;
-  waitForTimeout: (ms: number) => Promise<void>;
-  close: (options?: { runBeforeUnload?: boolean }) => Promise<void>;
-};
 
 type StopReason = "completed" | "canceled" | "time_limit" | "quota_reached";
 
@@ -107,7 +82,13 @@ export async function handleDiscoverJobsBrowser(payload: unknown, context: Handl
       for (const query of input.queries) {
         for (const location of locations) {
           if (foundBySource[source] >= sourceLimits[source]) continue outer;
-          const checkpoint = await shouldStop(context.command.id, deadlineAt, discovered.size, maxResults);
+          const checkpoint = await shouldStop(
+            context.command.id,
+            deadlineAt,
+            discovered.size,
+            maxResults,
+            context.claimGuard,
+          );
           if (checkpoint) {
             stopReason = checkpoint;
             break outer;
@@ -140,7 +121,13 @@ export async function handleDiscoverJobsBrowser(payload: unknown, context: Handl
 
           let savedThisSearch = 0;
           for (const url of urls) {
-            const detailStop = await shouldStop(context.command.id, deadlineAt, 0, Number.MAX_SAFE_INTEGER);
+            const detailStop = await shouldStop(
+              context.command.id,
+              deadlineAt,
+              0,
+              Number.MAX_SAFE_INTEGER,
+              context.claimGuard,
+            );
             if (detailStop && detailStop !== "quota_reached") {
               stopReason = detailStop;
               break outer;
@@ -247,75 +234,6 @@ export async function handleDiscoverJobsBrowser(payload: unknown, context: Handl
   };
 }
 
-async function openBrowserSession(playwright: PlaywrightModule, cfg: ReturnType<typeof getConfig>) {
-  const options = {
-    headless: cfg.JOB_BROWSER_HEADLESS,
-    slowMo: cfg.JOB_BROWSER_SLOW_MO_MS,
-    viewport: { width: 1365, height: 900 },
-    locale: "en-US",
-  };
-
-  if (cfg.JOB_BROWSER_CDP_URL) {
-    let lastError: unknown;
-    const maxAttempts = cfg.JOB_BROWSER_CDP_MANAGE_PAGES ? 2 : 1;
-    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-      let cdpCleanup: CdpCleanupResult | null = null;
-      let browser: BrowserLike | null = null;
-      try {
-        if (cfg.JOB_BROWSER_CDP_MANAGE_PAGES) {
-          cdpCleanup = await prepareManagedCdpBrowser(cfg.JOB_BROWSER_CDP_URL, {
-            requestTimeoutMs: cfg.JOB_BROWSER_CDP_CLEANUP_TIMEOUT_MS,
-            settleTimeoutMs: cfg.JOB_BROWSER_CDP_CLEANUP_TIMEOUT_MS,
-          });
-          logger.info("Prepared dedicated Chrome CDP browser", {
-            attempt,
-            closedPageCount: cdpCleanup.closedTargetIds.length,
-          });
-        }
-
-        const connectedBrowser = await playwright.chromium.connectOverCDP(cfg.JOB_BROWSER_CDP_URL, {
-          timeout: cfg.JOB_BROWSER_CDP_CONNECT_TIMEOUT_MS,
-        });
-        browser = connectedBrowser;
-        const context = connectedBrowser.contexts()[0] ?? (await connectedBrowser.newContext(options));
-        return {
-          context,
-          cdpCleanup: cdpCleanup
-            ? { closedPageCount: cdpCleanup.closedTargetIds.length }
-            : null,
-          close: async () => {
-            if (connectedBrowser.disconnect) await connectedBrowser.disconnect();
-            else await connectedBrowser.close();
-          },
-        };
-      } catch (error) {
-        lastError = error;
-        if (browser) {
-          try {
-            if (browser.disconnect) await browser.disconnect();
-            else await browser.close();
-          } catch {
-            // The connection already failed; the retry below performs a fresh cleanup.
-          }
-        }
-        logger.warn("Could not connect to Chrome CDP browser", {
-          attempt,
-          maxAttempts,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-    }
-    throw new Error(
-      `Could not connect to Chrome CDP browser after ${maxAttempts} attempt(s): ${
-        lastError instanceof Error ? lastError.message : String(lastError)
-      }`,
-    );
-  }
-
-  const context = await playwright.chromium.launchPersistentContext(cfg.JOB_BROWSER_USER_DATA_DIR, options);
-  return { context, cdpCleanup: null, close: () => context.close() };
-}
-
 function normalizeSourceLimits(
   sources: BrowserDiscoverySource[],
   sourceLimits: Partial<Record<BrowserDiscoverySource, number>> | undefined,
@@ -330,19 +248,12 @@ async function shouldStop(
   deadlineAt: number,
   discoveredCount: number,
   maxResults: number,
+  claimGuard?: { lost: boolean },
 ): Promise<StopReason | null> {
+  if (claimGuard?.lost) return "canceled";
   if (Date.now() >= deadlineAt) return "time_limit";
   const status = await getCommandStatus(commandId);
   if (status === "canceled") return "canceled";
   if (discoveredCount >= maxResults) return "quota_reached";
   return null;
-}
-
-async function loadPlaywright(): Promise<PlaywrightModule> {
-  try {
-    const dynamicImport = new Function("specifier", "return import(specifier)") as (specifier: string) => Promise<PlaywrightModule>;
-    return await dynamicImport("playwright");
-  } catch {
-    throw new Error("Playwright is required for browser discovery. Install it on the local worker machine with: npm install -D playwright && npx playwright install chromium");
-  }
 }

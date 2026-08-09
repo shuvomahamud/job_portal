@@ -10,9 +10,11 @@ import {
   commonAnswers,
   followups,
   resumeVersions,
+  targetRoles,
 } from "@/db/schema";
 import { requireDashboardUser } from "@/lib/auth";
 import { FOLLOWUP_STATUSES } from "@/lib/constants";
+import { isResumeHealthyForActivation } from "@/lib/resumeHealth";
 import { followupUpdateSchema } from "@/lib/validation";
 import { cancelCommand, createCommand, getCommandDetail } from "@/services/commands";
 
@@ -57,7 +59,20 @@ export async function saveCandidateProfile(formData: FormData) {
     githubUrl: optionalHttpUrl,
     portfolioUrl: optionalHttpUrl,
     summary: z.string().max(20_000).nullable(),
+    firstName: z.string().trim().max(100).nullable(),
+    lastName: z.string().trim().max(100).nullable(),
+    phone: z.string().trim().max(40).nullable(),
+    addressLine1: z.string().trim().max(200).nullable(),
+    addressLine2: z.string().trim().max(200).nullable(),
+    city: z.string().trim().max(100).nullable(),
+    stateRegion: z.string().trim().max(100).nullable(),
+    postalCode: z.string().trim().max(30).nullable(),
+    country: z.string().trim().max(100).nullable(),
+    currentCompany: z.string().trim().max(200).nullable(),
+    currentTitle: z.string().trim().max(200).nullable(),
+    yearsTotalExperience: z.number().int().min(0).max(60).nullable(),
   });
+  const yearsRaw = optionalString(formData, "yearsTotalExperience");
   const input = schema.parse({
     targetTitles: commaList(formData, "targetTitles"),
     targetLocations: commaList(formData, "targetLocations"),
@@ -75,6 +90,18 @@ export async function saveCandidateProfile(formData: FormData) {
     githubUrl: optionalString(formData, "githubUrl"),
     portfolioUrl: optionalString(formData, "portfolioUrl"),
     summary: optionalString(formData, "summary"),
+    firstName: optionalString(formData, "firstName"),
+    lastName: optionalString(formData, "lastName"),
+    phone: optionalString(formData, "phone"),
+    addressLine1: optionalString(formData, "addressLine1"),
+    addressLine2: optionalString(formData, "addressLine2"),
+    city: optionalString(formData, "city"),
+    stateRegion: optionalString(formData, "stateRegion"),
+    postalCode: optionalString(formData, "postalCode"),
+    country: optionalString(formData, "country") ?? "United States",
+    currentCompany: optionalString(formData, "currentCompany"),
+    currentTitle: optionalString(formData, "currentTitle"),
+    yearsTotalExperience: yearsRaw ? Number(yearsRaw) : null,
   });
 
   await getDb()
@@ -84,33 +111,6 @@ export async function saveCandidateProfile(formData: FormData) {
       target: candidateProfiles.userId,
       set: { ...input, updatedAt: new Date() },
     });
-  revalidatePath("/profile");
-}
-
-export async function addResumeVersion(formData: FormData) {
-  const user = await requireDashboardUser();
-  const input = z
-    .object({
-      name: z.string().trim().min(1).max(200),
-      storagePath: z.string().trim().min(1).max(2_000),
-      notes: z.string().trim().max(10_000).nullable(),
-      isDefault: z.boolean(),
-    })
-    .parse({
-      name: requiredString(formData, "name"),
-      storagePath: requiredString(formData, "storagePath"),
-      notes: optionalString(formData, "notes"),
-      isDefault: formData.get("isDefault") === "on",
-    });
-
-  const db = getDb();
-  if (input.isDefault) {
-    await db
-      .update(resumeVersions)
-      .set({ isDefault: false, updatedAt: new Date() })
-      .where(eq(resumeVersions.userId, user.id));
-  }
-  await db.insert(resumeVersions).values({ userId: user.id, ...input });
   revalidatePath("/profile");
 }
 
@@ -224,4 +224,135 @@ export async function updateFollowup(formData: FormData) {
     .where(and(eq(followups.id, id)));
   revalidatePath("/follow-ups");
   revalidatePath("/");
+}
+
+async function getOwnedResume(userId: string, resumeVersionId: string) {
+  const [resume] = await getDb()
+    .select()
+    .from(resumeVersions)
+    .where(
+      and(eq(resumeVersions.id, resumeVersionId), eq(resumeVersions.userId, userId)),
+    )
+    .limit(1);
+  return resume ?? null;
+}
+
+export async function createTargetRole(formData: FormData) {
+  const user = await requireDashboardUser();
+  const input = z
+    .object({
+      title: z.string().trim().min(1).max(200),
+      locations: z.array(z.string().min(1).max(200)).min(1).max(20),
+      resumeVersionId: z.uuid(),
+      maxApplicationsPerDay: z.number().int().min(1).max(100).nullable(),
+      notes: z.string().trim().max(5_000).nullable(),
+      active: z.boolean(),
+    })
+    .parse({
+      title: requiredString(formData, "title"),
+      locations: commaList(formData, "locations"),
+      resumeVersionId: requiredString(formData, "resumeVersionId"),
+      maxApplicationsPerDay: optionalString(formData, "maxApplicationsPerDay")
+        ? Number(requiredString(formData, "maxApplicationsPerDay"))
+        : null,
+      notes: optionalString(formData, "notes"),
+      active: formData.get("active") === "on",
+    });
+
+  const resume = await getOwnedResume(user.id, input.resumeVersionId);
+  if (!resume) throw new Error("Resume version not found.");
+  if (input.active && !isResumeHealthyForActivation(resume)) {
+    throw new Error("Cannot activate a role whose resume text is unhealthy. Re-extract or upload a clearer PDF/DOCX.");
+  }
+
+  await getDb().insert(targetRoles).values({
+    userId: user.id,
+    title: input.title,
+    locations: input.locations,
+    resumeVersionId: input.resumeVersionId,
+    maxApplicationsPerDay: input.maxApplicationsPerDay,
+    notes: input.notes,
+    active: input.active,
+  });
+  revalidatePath("/roles");
+}
+
+export async function updateTargetRole(formData: FormData) {
+  const user = await requireDashboardUser();
+  const id = z.uuid().parse(requiredString(formData, "roleId"));
+  const input = z
+    .object({
+      title: z.string().trim().min(1).max(200),
+      locations: z.array(z.string().min(1).max(200)).min(1).max(20),
+      resumeVersionId: z.uuid(),
+      maxApplicationsPerDay: z.number().int().min(1).max(100).nullable(),
+      notes: z.string().trim().max(5_000).nullable(),
+      active: z.boolean(),
+    })
+    .parse({
+      title: requiredString(formData, "title"),
+      locations: commaList(formData, "locations"),
+      resumeVersionId: requiredString(formData, "resumeVersionId"),
+      maxApplicationsPerDay: optionalString(formData, "maxApplicationsPerDay")
+        ? Number(requiredString(formData, "maxApplicationsPerDay"))
+        : null,
+      notes: optionalString(formData, "notes"),
+      active: formData.get("active") === "on",
+    });
+
+  const resume = await getOwnedResume(user.id, input.resumeVersionId);
+  if (!resume) throw new Error("Resume version not found.");
+  if (input.active && !isResumeHealthyForActivation(resume)) {
+    throw new Error("Cannot activate a role whose resume text is unhealthy. Re-extract or upload a clearer PDF/DOCX.");
+  }
+
+  await getDb()
+    .update(targetRoles)
+    .set({
+      title: input.title,
+      locations: input.locations,
+      resumeVersionId: input.resumeVersionId,
+      maxApplicationsPerDay: input.maxApplicationsPerDay,
+      notes: input.notes,
+      active: input.active,
+      updatedAt: new Date(),
+    })
+    .where(and(eq(targetRoles.id, id), eq(targetRoles.userId, user.id)));
+  revalidatePath("/roles");
+}
+
+export async function setTargetRoleActive(roleId: string, active: boolean) {
+  const user = await requireDashboardUser();
+  const id = z.uuid().parse(roleId);
+  const [role] = await getDb()
+    .select()
+    .from(targetRoles)
+    .where(and(eq(targetRoles.id, id), eq(targetRoles.userId, user.id)))
+    .limit(1);
+  if (!role) throw new Error("Role not found.");
+  if (active) {
+    const resume = await getOwnedResume(user.id, role.resumeVersionId);
+    if (!resume || !isResumeHealthyForActivation(resume)) {
+      throw new Error("Cannot activate a role whose resume text is unhealthy.");
+    }
+  }
+  await getDb()
+    .update(targetRoles)
+    .set({ active, updatedAt: new Date() })
+    .where(and(eq(targetRoles.id, id), eq(targetRoles.userId, user.id)));
+  revalidatePath("/roles");
+}
+
+export async function queueResumeTextSync(resumeVersionId?: string) {
+  const user = await requireDashboardUser();
+  const payloadJson = resumeVersionId
+    ? { resumeVersionIds: [z.uuid().parse(resumeVersionId)] }
+    : {};
+  await createCommand(
+    { type: "sync_resume_text", payloadJson, priority: "normal" },
+    { source: "dashboard", requestedBy: user.id },
+  );
+  revalidatePath("/roles");
+  revalidatePath("/profile");
+  revalidatePath("/commands");
 }

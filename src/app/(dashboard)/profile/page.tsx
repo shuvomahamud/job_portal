@@ -1,7 +1,6 @@
 import { desc, eq } from "drizzle-orm";
 import {
   BookOpenText,
-  FileText,
   Link2,
   Save,
   ShieldCheck,
@@ -15,11 +14,9 @@ import {
 import { PageHeader, SectionHeading } from "@/components/ui";
 import { requireDashboardUser } from "@/lib/auth";
 import { formatDate } from "@/lib/format";
-import {
-  addResumeVersion,
-  saveCandidateProfile,
-  saveCommonAnswer,
-} from "../actions";
+import { saveCandidateProfile, saveCommonAnswer } from "../actions";
+import { ResumeUploader } from "@/components/resume-uploader";
+import { resumeHealthLabel } from "@/lib/resumeHealth";
 
 export default async function ProfilePage() {
   const user = await requireDashboardUser();
@@ -58,6 +55,65 @@ export default async function ProfilePage() {
             description="Comma-separate titles and locations. All other fields remain plain, reusable facts."
           />
           <form action={saveCandidateProfile} className="grid gap-5 sm:grid-cols-2">
+            <fieldset className="sm:col-span-2 grid gap-5 sm:grid-cols-2 rounded-2xl border border-[var(--line)] bg-[var(--soft)]/60 p-4">
+              <legend className="px-1 text-sm font-semibold text-[var(--ink)]">
+                Contact & identity
+              </legend>
+              <label className="field">
+                <span>First name</span>
+                <input name="firstName" defaultValue={profile?.firstName ?? ""} />
+              </label>
+              <label className="field">
+                <span>Last name</span>
+                <input name="lastName" defaultValue={profile?.lastName ?? ""} />
+              </label>
+              <label className="field">
+                <span>Phone</span>
+                <input name="phone" defaultValue={profile?.phone ?? ""} />
+              </label>
+              <label className="field">
+                <span>Country</span>
+                <input name="country" defaultValue={profile?.country ?? "United States"} />
+              </label>
+              <label className="field sm:col-span-2">
+                <span>Address line 1</span>
+                <input name="addressLine1" defaultValue={profile?.addressLine1 ?? ""} />
+              </label>
+              <label className="field sm:col-span-2">
+                <span>Address line 2</span>
+                <input name="addressLine2" defaultValue={profile?.addressLine2 ?? ""} />
+              </label>
+              <label className="field">
+                <span>City</span>
+                <input name="city" defaultValue={profile?.city ?? ""} />
+              </label>
+              <label className="field">
+                <span>State / region</span>
+                <input name="stateRegion" defaultValue={profile?.stateRegion ?? ""} />
+              </label>
+              <label className="field">
+                <span>Postal code</span>
+                <input name="postalCode" defaultValue={profile?.postalCode ?? ""} />
+              </label>
+              <label className="field">
+                <span>Years of experience</span>
+                <input
+                  name="yearsTotalExperience"
+                  type="number"
+                  min={0}
+                  max={60}
+                  defaultValue={profile?.yearsTotalExperience ?? ""}
+                />
+              </label>
+              <label className="field">
+                <span>Current company</span>
+                <input name="currentCompany" defaultValue={profile?.currentCompany ?? ""} />
+              </label>
+              <label className="field">
+                <span>Current title</span>
+                <input name="currentTitle" defaultValue={profile?.currentTitle ?? ""} />
+              </label>
+            </fieldset>
             <label className="field sm:col-span-2">
               <span>Professional summary</span>
               <textarea
@@ -198,7 +254,7 @@ export default async function ProfilePage() {
           <section className="panel p-5 sm:p-6">
             <SectionHeading
               title="Resume versions"
-              description="Store a link or path, not file bytes."
+              description="Private Blob uploads only. Legacy path-based resumes must be re-uploaded."
             />
             <div className="space-y-3">
               {resumes.map((resume) => (
@@ -213,10 +269,10 @@ export default async function ProfilePage() {
                     )}
                   </div>
                   <p className="mt-2 truncate text-xs text-[var(--muted)]">
-                    {resume.storagePath}
+                    {resume.originalFilename ?? resume.blobPathname ?? resume.storagePath ?? "No file"}
                   </p>
                   <p className="mt-1 text-xs text-[var(--muted)]">
-                    Added {formatDate(resume.createdAt)}
+                    {resumeHealthLabel(resume)} · Added {formatDate(resume.createdAt)}
                   </p>
                 </div>
               ))}
@@ -226,33 +282,9 @@ export default async function ProfilePage() {
                 </p>
               )}
             </div>
-            <details className="form-disclosure mt-4">
-              <summary>Add a resume version</summary>
-              <form action={addResumeVersion} className="mt-4 space-y-4">
-                <label className="field">
-                  <span>Name</span>
-                  <input name="name" required placeholder="Product-focused v3" />
-                </label>
-                <label className="field">
-                  <span>File URL or storage path</span>
-                  <input
-                    name="storagePath"
-                    required
-                    placeholder="https://storage.example/resume.pdf"
-                  />
-                </label>
-                <label className="field">
-                  <span>Notes</span>
-                  <textarea name="notes" rows={2} />
-                </label>
-                <label className="flex items-center gap-2 text-sm text-[var(--muted)]">
-                  <input name="isDefault" type="checkbox" />
-                  Make this the default version
-                </label>
-                <button className="secondary-button w-full">
-                  <FileText className="size-4" /> Add version
-                </button>
-              </form>
+            <details className="form-disclosure mt-4" open>
+              <summary>Upload a resume</summary>
+              <ResumeUploader userId={user.id} />
             </details>
           </section>
         </aside>

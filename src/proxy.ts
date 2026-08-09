@@ -6,6 +6,7 @@ const isDashboardRoute = createRouteMatcher([
   "/jobs(.*)",
   "/import(.*)",
   "/profile(.*)",
+  "/roles(.*)",
   "/commands(.*)",
   "/follow-ups(.*)",
   "/settings(.*)",

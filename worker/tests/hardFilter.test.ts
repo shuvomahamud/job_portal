@@ -13,6 +13,8 @@ const candidate = {
   summary: "Experienced C# and .NET engineer with SQL Server and production support experience.",
   dealBreakers: [],
   matchingInstructions: null,
+      roleTitle: "",
+      resumeText: "",
 };
 
 const job = {

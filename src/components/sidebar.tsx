@@ -8,6 +8,7 @@ import {
   CalendarClock,
   CircleGauge,
   FileInput,
+  Layers3,
   Settings,
   UserRound,
 } from "lucide-react";
@@ -17,6 +18,7 @@ import { Logo } from "./logo";
 const navItems = [
   { href: "/", label: "Overview", icon: CircleGauge },
   { href: "/jobs", label: "Jobs", icon: BriefcaseBusiness },
+  { href: "/roles", label: "Roles", icon: Layers3 },
   { href: "/import", label: "Import", icon: FileInput },
   { href: "/profile", label: "Profile hub", icon: UserRound },
   { href: "/follow-ups", label: "Follow-ups", icon: CalendarClock },

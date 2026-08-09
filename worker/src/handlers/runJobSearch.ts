@@ -2,7 +2,7 @@ import { z } from "zod";
 import { getConfig } from "../config";
 import { upsertJobs } from "../db";
 import { buildSearchLinkJobs, type SearchSpec } from "../search/searchUrls";
-import type { HandlerResult } from "../types";
+import type { HandlerContext, HandlerResult } from "../types";
 
 const sources = z.array(z.enum(["indeed", "dice"])).min(1).max(2).optional();
 const payloadSchema = z.object({
@@ -21,7 +21,10 @@ const defaultQueries = [
 
 const defaultLocations = ["Remote", "New York", "Albany NY", "United States"];
 
-export async function handleRunJobSearch(payload: unknown): Promise<HandlerResult> {
+export async function handleRunJobSearch(
+  payload: unknown,
+  context: HandlerContext,
+): Promise<HandlerResult> {
   const cfg = getConfig();
   const input = payloadSchema.parse(payload);
   const limit = Math.min(input.limit ?? cfg.JOB_SEARCH_MAX_RESULTS_PER_COMMAND, cfg.JOB_SEARCH_MAX_RESULTS_PER_COMMAND);
@@ -39,6 +42,9 @@ export async function handleRunJobSearch(payload: unknown): Promise<HandlerResul
   }
 
   const jobs = buildSearchLinkJobs(specs, limit);
+  if (context.claimGuard.lost) {
+    return { generated: jobs.length, upserted: 0, jobIds: [], claimLost: true };
+  }
   const upserted = await upsertJobs(jobs);
 
   return {

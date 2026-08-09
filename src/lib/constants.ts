@@ -19,7 +19,16 @@ export const APPLICATION_STATUSES = [
   "offer",
   "rejected",
   "withdrawn",
+  "filling",
+  "awaiting_answer",
+  "submitting",
+  "submission_unknown",
+  "needs_manual",
+  "blocked",
+  "failed",
 ] as const;
+
+export const APPLY_MODES = ["dry_run", "fill_only", "fill_and_submit"] as const;
 
 export const FOLLOWUP_STATUSES = [
   "pending",
@@ -43,6 +52,9 @@ export const COMMAND_TYPES = [
   "sync_n8n_email_events",
   "mark_application_status",
   "reprocess_job",
+  "run_apply_cycle",
+  "apply_to_jobs",
+  "sync_resume_text",
 ] as const;
 
 export const COMMAND_STATUSES = [

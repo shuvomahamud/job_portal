@@ -26,6 +26,8 @@ async function main() {
       summary: "Senior C# and .NET engineer with SQL Server, Azure, and production support experience.",
       dealBreakers: [],
       matchingInstructions: null,
+      roleTitle: "",
+      resumeText: "",
     },
     job: {
       id: "smoke-job",

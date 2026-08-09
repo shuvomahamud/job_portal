@@ -42,6 +42,13 @@ export const applicationStatusEnum = pgEnum("application_status", [
   "offer",
   "rejected",
   "withdrawn",
+  "filling",
+  "awaiting_answer",
+  "submitting",
+  "submission_unknown",
+  "needs_manual",
+  "blocked",
+  "failed",
 ]);
 
 export const followupStatusEnum = pgEnum("followup_status", [
@@ -64,6 +71,9 @@ export const commandTypeEnum = pgEnum("command_type", [
   "sync_n8n_email_events",
   "mark_application_status",
   "reprocess_job",
+  "run_apply_cycle",
+  "apply_to_jobs",
+  "sync_resume_text",
 ]);
 
 export const commandSourceEnum = pgEnum("command_source", [
@@ -183,6 +193,18 @@ export const candidateProfiles = pgTable(
       .default(sql`ARRAY[]::text[]`)
       .notNull(),
     matchingInstructions: text("matching_instructions"),
+    firstName: text("first_name"),
+    lastName: text("last_name"),
+    phone: text("phone"),
+    addressLine1: text("address_line1"),
+    addressLine2: text("address_line2"),
+    city: text("city"),
+    stateRegion: text("state_region"),
+    postalCode: text("postal_code"),
+    country: text("country").default("United States"),
+    currentCompany: text("current_company"),
+    currentTitle: text("current_title"),
+    yearsTotalExperience: integer("years_total_experience"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
@@ -201,7 +223,21 @@ export const resumeVersions = pgTable(
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
     name: text("name").notNull(),
-    storagePath: text("storage_path").notNull(),
+    // Legacy path kept until Stage 10 cleanup. New uploads use blob_pathname.
+    storagePath: text("storage_path"),
+    blobPathname: text("blob_pathname"),
+    originalFilename: text("original_filename"),
+    mimeType: text("mime_type"),
+    sizeBytes: integer("size_bytes"),
+    sha256: text("sha256"),
+    resumeText: text("resume_text"),
+    resumeTextChars: integer("resume_text_chars"),
+    textExtractedAt: timestamp("text_extracted_at", { withTimezone: true }),
+    extractionError: text("extraction_error"),
+    supersededBy: uuid("superseded_by").references(
+      (): AnyPgColumn => resumeVersions.id,
+      { onDelete: "set null" },
+    ),
     notes: text("notes"),
     isDefault: boolean("is_default").default(false).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true })
@@ -211,7 +247,44 @@ export const resumeVersions = pgTable(
       .defaultNow()
       .notNull(),
   },
-  (table) => [index("resume_versions_user_idx").on(table.userId)],
+  (table) => [
+    index("resume_versions_user_idx").on(table.userId),
+    uniqueIndex("resume_versions_user_sha256_unique").on(
+      table.userId,
+      table.sha256,
+    ),
+  ],
+);
+
+export const targetRoles = pgTable(
+  "target_roles",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    title: text("title").notNull(),
+    locations: text("locations")
+      .array()
+      .default(sql`ARRAY[]::text[]`)
+      .notNull(),
+    resumeVersionId: uuid("resume_version_id")
+      .notNull()
+      .references(() => resumeVersions.id, { onDelete: "restrict" }),
+    active: boolean("active").default(true).notNull(),
+    maxApplicationsPerDay: integer("max_applications_per_day"),
+    notes: text("notes"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("target_roles_user_title_unique").on(table.userId, table.title),
+    index("target_roles_user_active_idx").on(table.userId, table.active),
+  ],
 );
 
 export const commonAnswers = pgTable(
@@ -240,6 +313,53 @@ export const commonAnswers = pgTable(
   ],
 );
 
+export const jobRoleMatches = pgTable(
+  "job_role_matches",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    jobId: uuid("job_id")
+      .notNull()
+      .references(() => jobs.id, { onDelete: "cascade" }),
+    targetRoleId: uuid("target_role_id")
+      .notNull()
+      .references(() => targetRoles.id, { onDelete: "cascade" }),
+    resumeVersionId: uuid("resume_version_id").references(
+      () => resumeVersions.id,
+      { onDelete: "restrict" },
+    ),
+    status: text("status").notNull(),
+    score: integer("score"),
+    evidenceJson: jsonb("evidence_json").$type<Record<string, unknown>>(),
+    reasons: text("reasons")
+      .array()
+      .default(sql`ARRAY[]::text[]`)
+      .notNull(),
+    candidateFingerprint: text("candidate_fingerprint"),
+    jobFingerprint: text("job_fingerprint"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("job_role_matches_user_job_role_unique").on(
+      table.userId,
+      table.jobId,
+      table.targetRoleId,
+    ),
+    index("job_role_matches_user_status_score_idx").on(
+      table.userId,
+      table.status,
+      table.score.desc(),
+    ),
+  ],
+);
+
 export const applications = pgTable(
   "applications",
   {
@@ -251,10 +371,23 @@ export const applications = pgTable(
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
     status: applicationStatusEnum("status").default("draft").notNull(),
+    targetRoleId: uuid("target_role_id").references(() => targetRoles.id, {
+      onDelete: "set null",
+    }),
+    jobRoleMatchId: uuid("job_role_match_id").references(
+      () => jobRoleMatches.id,
+      { onDelete: "set null" },
+    ),
     resumeVersionId: uuid("resume_version_id").references(
       () => resumeVersions.id,
       { onDelete: "set null" },
     ),
+    applyUrl: text("apply_url"),
+    stopReason: text("stop_reason"),
+    confirmationEvidence: jsonb("confirmation_evidence").$type<
+      Record<string, unknown>
+    >(),
+    submittedAt: timestamp("submitted_at", { withTimezone: true }),
     appliedAt: timestamp("applied_at", { withTimezone: true }),
     followupAt: timestamp("followup_at", { withTimezone: true }),
     recruiterName: text("recruiter_name"),
@@ -271,6 +404,60 @@ export const applications = pgTable(
     index("applications_user_idx").on(table.userId),
     index("applications_job_idx").on(table.jobId),
     index("applications_status_idx").on(table.status),
+    uniqueIndex("applications_job_user_unique").on(table.jobId, table.userId),
+  ],
+);
+
+export const applicationAnswers = pgTable(
+  "application_answers",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    scope: text("scope").default("global").notNull(),
+    scopeKey: text("scope_key").default("").notNull(),
+    normalizedQuestion: text("normalized_question").notNull(),
+    originalQuestion: text("original_question").notNull(),
+    category: text("category").notNull(),
+    answerValue: text("answer_value").notNull(),
+    answerType: text("answer_type").notNull(),
+    optionValue: text("option_value"),
+    sitePattern: text("site_pattern").default(""),
+    domain: text("domain").default(""),
+    aliases: text("aliases")
+      .array()
+      .default(sql`ARRAY[]::text[]`)
+      .notNull(),
+    riskLevel: text("risk_level").default("MEDIUM").notNull(),
+    source: text("source").default("user_reply").notNull(),
+    usageCount: integer("usage_count").default(0).notNull(),
+    lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
+    notes: text("notes").default(""),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("application_answers_user_scope_question_unique").on(
+      table.userId,
+      table.scope,
+      table.scopeKey,
+      table.normalizedQuestion,
+      table.category,
+    ),
+    index("application_answers_user_category_idx").on(
+      table.userId,
+      table.category,
+    ),
+    index("application_answers_user_scope_idx").on(
+      table.userId,
+      table.scope,
+      table.scopeKey,
+    ),
   ],
 );
 
@@ -351,6 +538,7 @@ export const commands = pgTable(
       .notNull(),
     claimedBy: text("claimed_by"),
     claimedAt: timestamp("claimed_at", { withTimezone: true }),
+    heartbeatAt: timestamp("heartbeat_at", { withTimezone: true }),
     completedAt: timestamp("completed_at", { withTimezone: true }),
     resultJson: jsonb("result_json").$type<Record<string, unknown>>(),
     errorMessage: text("error_message"),
@@ -369,6 +557,60 @@ export const commands = pgTable(
     ),
     index("commands_type_idx").on(table.type),
     index("commands_parent_idx").on(table.parentCommandId),
+  ],
+);
+
+export const pendingQuestions = pgTable(
+  "pending_questions",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    shortId: text("short_id").notNull(),
+    commandId: uuid("command_id")
+      .notNull()
+      .references(() => commands.id, { onDelete: "cascade" }),
+    jobId: uuid("job_id")
+      .notNull()
+      .references(() => jobs.id, { onDelete: "cascade" }),
+    applicationId: uuid("application_id").references(() => applications.id, {
+      onDelete: "set null",
+    }),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    fieldId: text("field_id"),
+    fieldSelector: text("field_selector"),
+    questionText: text("question_text").notNull(),
+    normalizedQuestion: text("normalized_question").notNull(),
+    category: text("category").notNull(),
+    answerType: text("answer_type").notNull(),
+    optionsJson: jsonb("options_json")
+      .$type<unknown[]>()
+      .default([])
+      .notNull(),
+    required: boolean("required").default(false).notNull(),
+    riskLevel: text("risk_level").default("HIGH").notNull(),
+    status: text("status").default("open").notNull(),
+    channel: text("channel").default("dashboard").notNull(),
+    channelMessageId: text("channel_message_id"),
+    answerValue: text("answer_value"),
+    answeredBy: text("answered_by"),
+    answeredAt: timestamp("answered_at", { withTimezone: true }),
+    contextJson: jsonb("context_json")
+      .$type<Record<string, unknown>>()
+      .default({})
+      .notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("pending_questions_short_id_unique").on(table.shortId),
+    index("pending_questions_user_status_idx").on(table.userId, table.status),
+    index("pending_questions_command_idx").on(table.commandId),
   ],
 );
 
@@ -415,12 +657,92 @@ export const usersRelations = relations(users, ({ one, many }) => ({
   resumes: many(resumeVersions),
   commonAnswers: many(commonAnswers),
   applications: many(applications),
+  targetRoles: many(targetRoles),
+  applicationAnswers: many(applicationAnswers),
+  pendingQuestions: many(pendingQuestions),
+  jobRoleMatches: many(jobRoleMatches),
 }));
 
 export const jobsRelations = relations(jobs, ({ many }) => ({
   applications: many(applications),
   reviews: many(jobReviews),
   followups: many(followups),
+  jobRoleMatches: many(jobRoleMatches),
+  pendingQuestions: many(pendingQuestions),
+}));
+
+export const resumeVersionsRelations = relations(
+  resumeVersions,
+  ({ one, many }) => ({
+    user: one(users, {
+      fields: [resumeVersions.userId],
+      references: [users.id],
+    }),
+    supersededByResume: one(resumeVersions, {
+      fields: [resumeVersions.supersededBy],
+      references: [resumeVersions.id],
+      relationName: "resume_superseded",
+    }),
+    targetRoles: many(targetRoles),
+  }),
+);
+
+export const targetRolesRelations = relations(targetRoles, ({ one, many }) => ({
+  user: one(users, {
+    fields: [targetRoles.userId],
+    references: [users.id],
+  }),
+  resumeVersion: one(resumeVersions, {
+    fields: [targetRoles.resumeVersionId],
+    references: [resumeVersions.id],
+  }),
+  jobRoleMatches: many(jobRoleMatches),
+  applications: many(applications),
+}));
+
+export const jobRoleMatchesRelations = relations(
+  jobRoleMatches,
+  ({ one }) => ({
+    user: one(users, {
+      fields: [jobRoleMatches.userId],
+      references: [users.id],
+    }),
+    job: one(jobs, {
+      fields: [jobRoleMatches.jobId],
+      references: [jobs.id],
+    }),
+    targetRole: one(targetRoles, {
+      fields: [jobRoleMatches.targetRoleId],
+      references: [targetRoles.id],
+    }),
+    resumeVersion: one(resumeVersions, {
+      fields: [jobRoleMatches.resumeVersionId],
+      references: [resumeVersions.id],
+    }),
+  }),
+);
+
+export const applicationsRelations = relations(applications, ({ one }) => ({
+  job: one(jobs, {
+    fields: [applications.jobId],
+    references: [jobs.id],
+  }),
+  user: one(users, {
+    fields: [applications.userId],
+    references: [users.id],
+  }),
+  targetRole: one(targetRoles, {
+    fields: [applications.targetRoleId],
+    references: [targetRoles.id],
+  }),
+  jobRoleMatch: one(jobRoleMatches, {
+    fields: [applications.jobRoleMatchId],
+    references: [jobRoleMatches.id],
+  }),
+  resumeVersion: one(resumeVersions, {
+    fields: [applications.resumeVersionId],
+    references: [resumeVersions.id],
+  }),
 }));
 
 export const commandsRelations = relations(commands, ({ one, many }) => ({
@@ -431,7 +753,12 @@ export const commandsRelations = relations(commands, ({ one, many }) => ({
   }),
   children: many(commands, { relationName: "command_parent" }),
   events: many(commandEvents),
+  pendingQuestions: many(pendingQuestions),
 }));
 
 export type Job = typeof jobs.$inferSelect;
 export type Command = typeof commands.$inferSelect;
+export type TargetRole = typeof targetRoles.$inferSelect;
+export type JobRoleMatch = typeof jobRoleMatches.$inferSelect;
+export type ApplicationAnswer = typeof applicationAnswers.$inferSelect;
+export type PendingQuestion = typeof pendingQuestions.$inferSelect;

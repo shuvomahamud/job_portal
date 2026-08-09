@@ -1,3 +1,4 @@
+import { withClaimHeartbeat } from "./claimHeartbeat";
 import { getConfig, sleep } from "./config";
 import { claimCommand, completeCommand, failCommand } from "./dashboardClient";
 import { addCommandEvent, recoverStaleClaims } from "./db";
@@ -19,11 +20,16 @@ process.on("SIGTERM", () => {
 
 async function processCommand(command: DashboardCommand) {
   logger.info("Processing command", { commandId: command.id, type: command.type });
+  const cfg = getConfig();
   try {
     await addCommandEvent(command.id, "worker_started", "Phase 2 worker started processing command.", {
       type: command.type,
     });
-    const result = await dispatchCommand(command);
+    const result = await withClaimHeartbeat(
+      command,
+      cfg.WORKER_HEARTBEAT_INTERVAL_SECONDS * 1000,
+      (claimGuard) => dispatchCommand(command, claimGuard),
+    );
     await completeCommand(command.id, result);
     logger.info("Completed command", { commandId: command.id, type: command.type });
   } catch (error) {

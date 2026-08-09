@@ -5,6 +5,7 @@ const MAX_ITEM_LENGTH = 200;
 const MAX_SUMMARY_LENGTH = 20_000;
 const MAX_INSTRUCTIONS_LENGTH = 4_000;
 const MAX_JOB_DESCRIPTION_LENGTH = 50_000;
+const MAX_RESUME_TEXT_LENGTH = 20_000;
 
 type CandidateProfileRow = {
   targetTitles: string[];
@@ -44,10 +45,20 @@ function list(values: string[] | null | undefined) {
   );
 }
 
-export function buildCandidateMatchingContext(profile: CandidateProfileRow): CandidateMatchingContext {
+export function buildCandidateMatchingContext(
+  profile: CandidateProfileRow,
+  options?: {
+    roleTitle?: string;
+    resumeText?: string | null;
+    locations?: string[];
+  },
+): CandidateMatchingContext {
+  const roleTitle = text(options?.roleTitle, MAX_ITEM_LENGTH);
   return {
-    targetTitles: list(profile.targetTitles),
-    targetLocations: list(profile.targetLocations),
+    targetTitles: roleTitle ? [roleTitle] : list(profile.targetTitles),
+    targetLocations: options?.locations?.length
+      ? list(options.locations)
+      : list(profile.targetLocations),
     skills: list(profile.skills),
     preferredEmploymentTypes: list(profile.preferredEmploymentTypes),
     workAuthorizationAnswer: text(profile.workAuthorizationAnswer, 5_000),
@@ -56,6 +67,8 @@ export function buildCandidateMatchingContext(profile: CandidateProfileRow): Can
     summary: text(profile.summary, MAX_SUMMARY_LENGTH),
     dealBreakers: list(profile.dealBreakers),
     matchingInstructions: text(profile.matchingInstructions, MAX_INSTRUCTIONS_LENGTH) || null,
+    roleTitle,
+    resumeText: text(options?.resumeText, MAX_RESUME_TEXT_LENGTH),
   };
 }
 

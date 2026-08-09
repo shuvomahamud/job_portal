@@ -2,7 +2,7 @@ import { z } from "zod";
 import { getConfig, sleep } from "../config";
 import { upsertJobs } from "../db";
 import { normalizeUrlJob } from "../importer/fetchJob";
-import type { HandlerResult, JobSource } from "../types";
+import type { HandlerContext, HandlerResult, JobSource } from "../types";
 
 const payloadSchema = z.object({
   source: z.enum(["linkedin", "indeed", "dice", "company_site", "other"]),
@@ -10,13 +10,17 @@ const payloadSchema = z.object({
   batchId: z.string().uuid().optional(),
 }).strict();
 
-export async function handleImportJobs(payload: unknown): Promise<HandlerResult> {
+export async function handleImportJobs(
+  payload: unknown,
+  context: HandlerContext,
+): Promise<HandlerResult> {
   const cfg = getConfig();
   const input = payloadSchema.parse(payload);
   const normalized = [];
   const errors: Array<{ url: string; error: string }> = [];
 
   for (const url of input.urls) {
+    if (context.claimGuard.lost) break;
     try {
       normalized.push(await normalizeUrlJob(url, input.source as JobSource));
     } catch (error) {
@@ -32,5 +36,6 @@ export async function handleImportJobs(payload: unknown): Promise<HandlerResult>
     errors,
     jobIds: jobs.map((job) => job.id),
     batchId: input.batchId ?? null,
+    claimLost: context.claimGuard.lost,
   };
 }

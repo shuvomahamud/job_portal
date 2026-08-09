@@ -1,3 +1,5 @@
+import type { ClaimGuard } from "./claimHeartbeat";
+
 export type CommandType =
   | "find_matching_jobs"
   | "run_job_search"
@@ -11,7 +13,18 @@ export type CommandType =
   | "trigger_n8n_summary"
   | "sync_n8n_email_events"
   | "mark_application_status"
-  | "reprocess_job";
+  | "reprocess_job"
+  | "run_apply_cycle"
+  | "apply_to_jobs"
+  | "sync_resume_text";
+
+export type WorkerSpawnableCommandType =
+  | "run_local_llm_extraction"
+  | "find_matching_jobs"
+  | "discover_jobs_browser"
+  | "apply_to_jobs"
+  | "run_apply_cycle"
+  | "sync_resume_text";
 
 export type Priority = "low" | "normal" | "high" | "urgent";
 export type JobSource = "linkedin" | "indeed" | "dice" | "company_site" | "referral" | "manual" | "other";
@@ -28,6 +41,7 @@ export type DashboardCommand = {
   scheduledFor: string | Date;
   claimedBy: string | null;
   claimedAt: string | Date | null;
+  heartbeatAt?: string | Date | null;
   completedAt: string | Date | null;
   resultJson: Record<string, unknown> | null;
   errorMessage: string | null;
@@ -56,6 +70,7 @@ export type NormalizedJobInput = {
 
 export type HandlerContext = {
   command: DashboardCommand;
+  claimGuard: ClaimGuard;
 };
 
 export type HandlerResult = Record<string, unknown>;

@@ -40,3 +40,25 @@ test("historical manual imports still allow LinkedIn source data", () => {
     true,
   );
 });
+
+test("role-scoped local matching requires an explicit role and resume", () => {
+  const base = {
+    parentCommandId: "10000000-0000-4000-8000-000000000000",
+    candidateProfileId: "20000000-0000-4000-8000-000000000000",
+    jobIds: ["30000000-0000-4000-8000-000000000000"],
+    promptVersion: "job-match-prompt-v1" as const,
+    policyVersion: "job-match-policy-v1" as const,
+  };
+  assert.equal(
+    commandPayloadSchemas.run_local_llm_extraction.safeParse(base).success,
+    false,
+  );
+  assert.equal(
+    commandPayloadSchemas.run_local_llm_extraction.safeParse({
+      ...base,
+      targetRoleId: "40000000-0000-4000-8000-000000000000",
+      resumeVersionId: "50000000-0000-4000-8000-000000000000",
+    }).success,
+    true,
+  );
+});

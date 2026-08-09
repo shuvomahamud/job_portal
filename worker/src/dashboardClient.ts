@@ -79,3 +79,15 @@ export async function failCommand(commandId: string, errorMessage: string, resul
     resultJson,
   });
 }
+
+export async function requestResumeDownloadUrl(resumeVersionId: string) {
+  return dashboardRequest<{
+    resumeVersionId: string;
+    pathname: string;
+    sha256: string;
+    mimeType: string | null;
+    originalFilename: string | null;
+    downloadUrl: string;
+    expiresAt: string;
+  }>("/api/worker/resume-download", { resumeVersionId });
+}

@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { getJobsForRuleFilter, insertRuleReview, updateJobAfterRuleFilter } from "../db";
 import { evaluateJob } from "../rules/ruleEngine";
-import type { HandlerResult, NormalizedJobInput } from "../types";
+import type { HandlerContext, HandlerResult, NormalizedJobInput } from "../types";
 
 const payloadSchema = z.object({
   jobIds: z.array(z.string().uuid()).min(1).max(100).optional(),
@@ -9,7 +9,10 @@ const payloadSchema = z.object({
   limit: z.number().int().min(1).max(200).default(100).optional(),
 }).strict();
 
-export async function handleRunRuleFilter(payload: unknown): Promise<HandlerResult> {
+export async function handleRunRuleFilter(
+  payload: unknown,
+  context: HandlerContext,
+): Promise<HandlerResult> {
   const parsed = payloadSchema.parse(payload ?? {});
   const jobs = await getJobsForRuleFilter({ jobIds: parsed.jobIds, limit: parsed.limit ?? 100 });
 
@@ -19,6 +22,7 @@ export async function handleRunRuleFilter(payload: unknown): Promise<HandlerResu
   const processed: Array<{ jobId: string; score: number; status: string; recommendation: string }> = [];
 
   for (const job of jobs) {
+    if (context.claimGuard.lost) break;
     const evaluation = evaluateJob(job as NormalizedJobInput & { id: string });
     await updateJobAfterRuleFilter(job.id, evaluation);
     await insertRuleReview(job.id, evaluation, parsed.ruleset);
@@ -35,5 +39,6 @@ export async function handleRunRuleFilter(payload: unknown): Promise<HandlerResu
     needsReview,
     archived,
     processed,
+    claimLost: context.claimGuard.lost,
   };
 }
