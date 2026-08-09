@@ -1,5 +1,9 @@
 # AI Profile-to-Job Matching: Implementation Guide
 
+**Status: COMPLETED matching foundation.** Automated apply continues in
+`docs/searchlight-automated-apply-implementation-plan.md`. Do not reopen LinkedIn
+automation or browser-extension matching work from this guide.
+
 Status: implemented
 
 Implementation agent: GPT-5.3-Codex

@@ -22,8 +22,6 @@ const endpoints = [
   ],
   ["VPS worker", "POST /api/worker/fail-command", "WORKER_API_SECRET"],
   ["n8n", "POST /api/n8n/events", "N8N_WEBHOOK_SECRET"],
-  ["Extension", "GET /api/extension/profile", "EXTENSION_API_SECRET"],
-  ["Extension", "GET /api/extension/job/:id", "EXTENSION_API_SECRET"],
 ] as const;
 
 export default function SettingsPage() {

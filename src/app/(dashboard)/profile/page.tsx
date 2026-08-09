@@ -131,16 +131,13 @@ export default async function ProfilePage() {
                 placeholder="C#, .NET, SQL Server, Oracle, Azure, React"
               />
             </label>
-            <label className="field">
-              <span>Target titles</span>
-              <input
-                name="targetTitles"
-                defaultValue={profile?.targetTitles.join(", ") ?? ""}
-                placeholder="Senior Software Engineer, Staff Engineer"
-              />
-            </label>
-            <label className="field">
-              <span>Target locations</span>
+            <p className="sm:col-span-2 rounded-xl border border-[var(--line)] bg-[var(--soft)] p-3 text-sm text-[var(--muted)]">
+              Target titles now live on <a className="text-link" href="/roles">/roles</a>.
+              The legacy <code>target_titles</code> column is preserved for audit and will be
+              dropped only after a later verified migration.
+            </p>
+            <label className="field sm:col-span-2">
+              <span>Target locations (profile default)</span>
               <input
                 name="targetLocations"
                 defaultValue={profile?.targetLocations.join(", ") ?? ""}

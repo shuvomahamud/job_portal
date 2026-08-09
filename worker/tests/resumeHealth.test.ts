@@ -35,11 +35,12 @@ test("resume health requires blob, extraction, and enough characters", () => {
   );
   assert.match(
     resumeHealthLabel({
-      blobPathname: "resumes/u/a.pdf",
-      resumeTextChars: 100,
+      blobPathname: null,
+      storagePath: "/old/local/resume.pdf",
+      resumeTextChars: 2000,
       extractionError: null,
       textExtractedAt: new Date(),
     }),
-    /Thin extraction/,
+    /Legacy local path/,
   );
 });

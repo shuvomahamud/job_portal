@@ -1,5 +1,10 @@
 # H-1B Transfer / Contract-Fit Job Search Implementation Plan
 
+**Status: SUPERSEDED.** This document still describes LinkedIn automation and a
+browser extension. Matching lives in the completed AI matching guide; automated
+apply lives in `docs/searchlight-automated-apply-implementation-plan.md`. Keep
+this file only as historical context.
+
 Status: implementation plan for the next job-search automation upgrade  
 Project: `/home/shuvo/project/job_portal`  
 Primary goal: stop treating discovered Indeed/Dice/LinkedIn links as apply-ready. Every job must first be enriched, matched against the candidate profile, and classified for H-1B transfer / contract likelihood before it can enter the apply queue.

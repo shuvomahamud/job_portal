@@ -106,9 +106,4 @@ export const INTEGRATIONS = [
     variable: "N8N_WEBHOOK_SECRET",
     purpose: "Records email and workflow events for later processing.",
   },
-  {
-    name: "Browser extension",
-    variable: "EXTENSION_API_SECRET",
-    purpose: "Reads a constrained candidate profile and individual job context.",
-  },
 ] as const;

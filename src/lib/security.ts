@@ -5,14 +5,12 @@ import { constantTimeSecretEquals } from "./security-core";
 export type ScopedSecret =
   | "HERMES_COMMAND_SECRET"
   | "WORKER_API_SECRET"
-  | "N8N_WEBHOOK_SECRET"
-  | "EXTENSION_API_SECRET";
+  | "N8N_WEBHOOK_SECRET";
 
 const scopedHeaders: Record<ScopedSecret, string> = {
   HERMES_COMMAND_SECRET: "x-hermes-command-secret",
   WORKER_API_SECRET: "x-worker-api-secret",
   N8N_WEBHOOK_SECRET: "x-n8n-webhook-secret",
-  EXTENSION_API_SECRET: "x-extension-api-secret",
 };
 
 function suppliedSecret(request: Request, scope: ScopedSecret) {

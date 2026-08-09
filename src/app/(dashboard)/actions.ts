@@ -49,7 +49,6 @@ const optionalHttpUrl = z
 export async function saveCandidateProfile(formData: FormData) {
   const user = await requireDashboardUser();
   const schema = z.object({
-    targetTitles: z.array(z.string().min(1).max(200)).max(30),
     targetLocations: z.array(z.string().min(1).max(200)).max(30),
     workAuthorizationAnswer: z.string().max(5_000).nullable(),
     sponsorshipAnswer: z.string().max(5_000).nullable(),
@@ -77,7 +76,6 @@ export async function saveCandidateProfile(formData: FormData) {
   });
   const yearsRaw = optionalString(formData, "yearsTotalExperience");
   const input = schema.parse({
-    targetTitles: commaList(formData, "targetTitles"),
     targetLocations: commaList(formData, "targetLocations"),
     workAuthorizationAnswer: optionalString(
       formData,

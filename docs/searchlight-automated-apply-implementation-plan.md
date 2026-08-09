@@ -702,18 +702,13 @@ This reuses `scheduledFor` and `parent_command_id`, both already indexed by `com
 
 ## Stage 10 — Cleanup and staged rollout
 
-Only after replacements pass their tests, and only with `rg` confirming no remaining consumers.
+**Stage 10 status (code):** extension read APIs and `CommandComposer` removed;
+`EXTENSION_API_SECRET` retired from settings/security; profile UI no longer
+writes `target_titles` (manage titles on `/roles`); legacy `storage_path`
+resumes report “re-upload to Blob”; matching foundation / H-1B docs marked
+completed / superseded.
 
-- Mark `docs/ai-profile-job-matching-implementation-guide.md` as the completed matching foundation.
-- Mark `docs/h1b-contract-fit-implementation-plan.md` superseded — it still describes LinkedIn and a browser extension.
-- Migrate `candidate_profile.target_titles` into `target_roles`, stop writing it from the UI, and remove the column only in a later verified migration.
-- Remove `src/app/api/extension/profile/route.ts`, `src/app/api/extension/job/[id]/route.ts`, the `EXTENSION_API_SECRET` env var and its settings row, and all extension wording in the README. *Both routes are confirmed present today.*
-- Remove `src/components/command-composer.tsx` — *confirmed imported nowhere.*
-- Mark legacy `resume_versions` rows carrying a `storage_path` as requiring re-upload. Delete old files only with explicit confirmation.
-- Stop writing user-specific match state to global `jobs` fields; read from `job_role_matches` and `applications`.
-- Keep historical command enum values and rows for audit. Remove unused legacy commands from active UI and worker allow-lists only.
-
-### Rollout — in order, never skipping a step
+### Rollout — in order, never skipping a step (ops only; requires human approval)
 
 1. `JOB_APPLY_ENABLED=false` → the handler throws. Confirm this.
 2. `dry_run`, one role, one real Indeed job. Read the logged plan and every screenshot. Assert nothing was typed.

@@ -16,9 +16,11 @@ cases. It never submits an application.
 - Applications, reviews, and follow-up data models
 - An allow-listed, auditable command queue
 - Atomic worker command claiming with `FOR UPDATE SKIP LOCKED`
-- Scoped APIs for Hermes, the VPS worker, n8n, and a browser extension
+- Scoped APIs for Hermes, the VPS worker, and n8n
 - Indeed/Dice-only browser discovery with individual-detail extraction
 - Mac Ollama `qwen3.5:9b` structured profile matching
+- Role-scoped resumes, answer bank, and optional Mac Playwright apply pipeline
+  (`JOB_APPLY_ENABLED` remains off until explicitly enabled)
 - Deterministic match policy and optional remote review for uncertain results
 - Parent/child matching-run progress and an auditable review trail
 - Drizzle schema, generated Postgres migration, idempotent sample seed data
@@ -36,8 +38,8 @@ cases. It never submits an application.
    Hermes ─────────►│   Next.js on   │◄──────── Dashboard browser
    scoped secret    │     Vercel     │          Clerk session
                     │                │
-   n8n ────────────►│ API + server   │◄──────── Browser extension
-   scoped secret    │    actions     │          scoped read secret
+   n8n ────────────►│ API + server   │◄──────── Telegram webhook
+   scoped secret    │    actions     │          secret-token header
                     └───────┬────────┘
                             │ Drizzle + Neon HTTP
                     ┌───────▼────────┐
@@ -89,7 +91,6 @@ Copy `.env.example` to `.env.local` for local development.
 | `HERMES_COMMAND_SECRET` | Creates structured commands from Hermes |
 | `WORKER_API_SECRET` | Claims and resolves commands from the VPS worker |
 | `N8N_WEBHOOK_SECRET` | Ingests n8n integration events |
-| `EXTENSION_API_SECRET` | Reads extension profile and job context |
 | `APP_BASE_URL` | Absolute app origin, for example `https://app.example.com` |
 
 The sample `.env.example` also includes optional seed identity values. Set
@@ -193,7 +194,6 @@ Dashboard endpoints use the Clerk session. Integration endpoints accept either:
   - `x-hermes-command-secret`
   - `x-worker-api-secret`
   - `x-n8n-webhook-secret`
-  - `x-extension-api-secret`
 
 Secret comparisons use constant-time comparison. Missing server configuration
 returns `503`; missing or incorrect credentials return `401`.
@@ -231,8 +231,7 @@ All responses use one of these shapes:
 | `POST /api/n8n/events` | n8n secret |
 | `GET /api/dashboard/summary` | Clerk dashboard session |
 | `GET /api/matching-runs/:id` | Clerk dashboard session, run owner only |
-| `GET /api/extension/profile` | Extension secret |
-| `GET /api/extension/job/:id` | Extension secret |
+| `POST /api/telegram/webhook` | Telegram secret token header |
 
 ## Matching workflow
 
@@ -332,7 +331,7 @@ curl -X POST "$APP_BASE_URL/api/worker/fail-command" \
 A worker can only complete or fail a command it currently owns. Creation,
 claim, completion, failure, and retry actions append `command_events`.
 
-## n8n and extension contracts
+## n8n contracts
 
 n8n records an event for later processing:
 
@@ -344,18 +343,6 @@ curl -X POST "$APP_BASE_URL/api/n8n/events" \
     "eventType": "recruiter_email_received",
     "payloadJson": { "externalMessageId": "provider-safe-id" }
   }'
-```
-
-The extension can read the constrained profile bundle or one job:
-
-```bash
-curl "$APP_BASE_URL/api/extension/profile" \
-  -H "x-extension-api-secret: $EXTENSION_API_SECRET"
-```
-
-```bash
-curl "$APP_BASE_URL/api/extension/job/JOB_UUID" \
-  -H "x-extension-api-secret: $EXTENSION_API_SECRET"
 ```
 
 ## Security rules
@@ -370,7 +357,8 @@ curl "$APP_BASE_URL/api/extension/job/JOB_UUID" \
 - Do not log authorization headers or payloads that contain third-party secrets.
 - Keep Clerk invite-only for this single-tenant Phase 1 schema.
 - Rotate a compromised integration secret without rotating unrelated scopes.
-- Return extension data only through the dedicated constrained read endpoints.
+- Keep `JOB_APPLY_ENABLED=false` until the staged rollout checklist in
+  `docs/searchlight-automated-apply-implementation-plan.md` is followed.
 
 The system intentionally records resume URLs/paths, not resume file bytes.
 Object storage and signed download URLs can be added when actual uploads are in
@@ -416,10 +404,10 @@ See `worker/README.md` for env vars, systemd deployment, and command payload exa
 
 ### Phase 4 — assisted application workflow
 
-- Add the browser extension UI using the existing extension read contracts.
-- Add human-approved answer drafting and application status capture.
-- Add notification summaries and follow-up creation through n8n.
-- Keep final application submission and sensitive answers human-controlled.
+- Use `/roles`, `/questions`, and `/applications` as the apply command center.
+- Answer unresolved fields via Telegram or the dashboard answer bank.
+- Follow the staged rollout gates before enabling `JOB_APPLY_ENABLED`.
+- Keep sensitive answers and final submission human-controlled until fill_and_submit is approved.
 
 Every future component should integrate through the existing database and
 structured APIs instead of creating a parallel source of truth.

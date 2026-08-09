@@ -7,6 +7,7 @@ export const RESUME_ALLOWED_MIME_TYPES = [
 
 export type ResumeHealthInput = {
   blobPathname: string | null;
+  storagePath?: string | null;
   resumeTextChars: number | null;
   extractionError: string | null;
   textExtractedAt: Date | string | null;
@@ -21,7 +22,11 @@ export function isResumeHealthyForActivation(resume: ResumeHealthInput): boolean
 }
 
 export function resumeHealthLabel(resume: ResumeHealthInput): string {
-  if (!resume.blobPathname) return "Needs re-upload";
+  if (!resume.blobPathname) {
+    return resume.storagePath
+      ? "Legacy local path — re-upload to Blob"
+      : "Needs re-upload";
+  }
   if (resume.extractionError) return "Extraction failed";
   if (!resume.textExtractedAt) return "Text not extracted";
   if ((resume.resumeTextChars ?? 0) < RESUME_MIN_HEALTHY_CHARS) {
