@@ -8,6 +8,7 @@ import {
   type BrowserDiscoverySource,
 } from "../search/browserDiscovery";
 import { extractJobDetail } from "../search/jobDetailExtraction";
+import { MAX_DISCOVERY_RESULTS_PER_COMMAND } from "../search/discoveryLimits";
 import { loadPlaywright, openBrowserSession } from "../browser/session";
 import type { PageLike } from "../browser/playwrightTypes";
 import { logger } from "../logger";
@@ -20,11 +21,11 @@ const sourceLimitsSchema = z
   })
   .strict();
 
-const payloadSchema = z.object({
+export const payloadSchema = z.object({
   sources: z.array(z.enum(["indeed", "dice"])).min(1).max(2).default(["indeed", "dice"]).optional(),
   queries: z.array(z.string().trim().min(1).max(200)).min(1).max(10),
   locations: z.array(z.string().trim().min(1).max(200)).min(1).max(10).default(["Remote"]).optional(),
-  maxResults: z.number().int().min(1).max(100).optional(),
+  maxResults: z.number().int().min(1).max(MAX_DISCOVERY_RESULTS_PER_COMMAND).optional(),
   sourceLimits: sourceLimitsSchema.optional(),
   maxPagesPerSearch: z.number().int().min(1).max(5).optional(),
   maxRuntimeMinutes: z.number().int().min(1).max(30).default(30).optional(),

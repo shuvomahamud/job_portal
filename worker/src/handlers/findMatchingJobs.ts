@@ -19,16 +19,24 @@ import {
 import { FACT_MIN_CONFIDENCE } from "../resume/extractFacts";
 import { requireCommandUserId } from "../requireCommandUserId";
 import { handleDiscoverJobsBrowser } from "./discoverJobsBrowser";
+import { MAX_DISCOVERY_RESULTS_PER_COMMAND } from "../search/discoveryLimits";
 import type { HandlerContext, HandlerResult } from "../types";
 // Shared with the dashboard so both agree on what makes a resume usable.
 import { isResumeHealthyForActivation } from "../../../src/lib/resumeHealth";
 
-const payloadSchema = z
+export const payloadSchema = z
   .object({
     sources: z.array(z.enum(["indeed", "dice"])).min(1).max(2).default(["indeed", "dice"]),
     queries: z.array(z.string().trim().min(1).max(200)).min(1).max(10),
     locations: z.array(z.string().trim().min(1).max(200)).min(1).max(10),
-    maxResults: z.number().int().min(1).max(50).default(10),
+    // Shared with discover_jobs_browser, which this handler passes maxResults straight
+    // through to. A lower cap here rejects the whole command rather than trimming it.
+    maxResults: z
+      .number()
+      .int()
+      .min(1)
+      .max(MAX_DISCOVERY_RESULTS_PER_COMMAND)
+      .default(10),
     targetRoleId: z.uuid().optional(),
   })
   .strict();
