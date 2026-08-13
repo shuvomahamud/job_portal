@@ -1,7 +1,8 @@
 /**
  * Picks which of the candidate's addresses to put on an application.
  *
- * Shared with the worker so the dashboard can show the same answer the apply run will use.
+ * Lives in src/lib so the dashboard and the worker share one definition of "nearest";
+ * the worker picks the address, and the profile page reuses the suggested match terms.
  *
  * Deliberately deterministic rather than geocoded: real postings carry explicit city text
  * ("New York, NY, US", "Long Island City, NY, US", "Albany, NY"), so matching city and

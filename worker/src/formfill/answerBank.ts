@@ -529,11 +529,19 @@ export async function learnAnswer(
   await db.batch([upsert, markPending]);
 }
 
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Only ids that are real application_answers rows can have a usage counter. */
+export function isPersistedAnswerId(id: string): boolean {
+  return UUID_PATTERN.test(id);
+}
+
 export async function markAnswersUsed(ids: string[], database?: AnswerDb): Promise<void> {
-  // Synthesized entries (profile, common, fact) have no application_answers row to count.
-  const realIds = ids.filter(
-    (id) => !id.startsWith("profile:") && !id.startsWith("common:") && !id.startsWith("fact:"),
-  );
+  // Synthesized entries (profile:, common:, fact:, derived:) have no application_answers
+  // row to count. Allowlisting UUIDs rather than blocklisting known prefixes keeps a new
+  // synthesized source from reaching Postgres, where a non-UUID id errors on a uuid column.
+  const realIds = ids.filter(isPersistedAnswerId);
   if (!realIds.length) return;
   const db = dbOrDefault(database);
   const now = new Date();

@@ -469,6 +469,14 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
     });
     const answers = bank.answers;
     if (bank.addressLabel) {
+      // Logged as well as recorded: command events only reach the dashboard, while the
+      // JobAgent activity log mirrors this process's stdout. Both decisions below put
+      // real data into a real application, so they should be visible as a run happens.
+      logger.info(`Applying with the "${bank.addressLabel}" address`, {
+        jobId: input.job.id,
+        jobLocation: input.job.location ?? null,
+        reason: bank.addressReason ?? undefined,
+      });
       await addCommandEvent(
         input.commandId,
         "apply_address_selected",
@@ -481,6 +489,14 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
       );
     }
     if (bank.salaryDecision) {
+      logger.info(
+        `Answering compensation with ${bank.salaryDecision.target} (${bank.salaryDecision.period})`,
+        {
+          jobId: input.job.id,
+          postedRange: input.job.salaryText ?? null,
+          reason: bank.salaryDecision.reason,
+        },
+      );
       await addCommandEvent(
         input.commandId,
         "apply_salary_derived",
