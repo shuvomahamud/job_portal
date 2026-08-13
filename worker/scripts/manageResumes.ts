@@ -145,7 +145,36 @@ async function add(sourcePath: string, explicitName: string | null) {
       .where(eq(schema.resumeVersions.id, resumeId));
   }
 
-  return { id: resumeId, name, chars: resumeTextChars, extractionError };
+  // Text is extracted above, but facts are not: fact extraction needs a local model and
+  // lives in the sync_resume_text handler. Queue that rather than duplicating it here, so
+  // adding a resume cannot leave facts describing the resume it replaced. Queued rather
+  // than run inline so a slow or absent model never blocks adding a resume.
+  let factsCommandId: string | null = null;
+  if (resumeText) {
+    const [command] = await database
+      .insert(schema.commands)
+      .values({
+        type: "sync_resume_text",
+        source: "system",
+        requestedBy: userId,
+        payloadJson: { resumeVersionIds: [resumeId] },
+        priority: "high",
+        scheduledFor: new Date(),
+      })
+      .returning({ id: schema.commands.id });
+    factsCommandId = command?.id ?? null;
+    if (factsCommandId) {
+      await database.insert(schema.commandEvents).values({
+        commandId: factsCommandId,
+        eventType: "created",
+        message: "Resume added in JobAgent; queued a resume sync to refresh candidate facts.",
+        metadataJson: { resumeVersionId: resumeId, requestedBy: userId },
+      });
+      log("Queued a resume sync so candidate facts match this resume.");
+    }
+  }
+
+  return { id: resumeId, name, chars: resumeTextChars, extractionError, factsCommandId };
 }
 
 async function remove(resumeId: string) {

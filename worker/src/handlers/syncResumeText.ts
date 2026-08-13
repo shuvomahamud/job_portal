@@ -85,17 +85,29 @@ export async function handleSyncResumeText(
           ollamaKeepAlive: cfg.OLLAMA_KEEP_ALIVE,
           model: cfg.OLLAMA_MODEL,
         });
-        const written = await upsertCandidateFacts({
+        const { written, pruned } = await upsertCandidateFacts({
           userId,
           resumeVersionId: row.id,
           facts,
         });
         factKeys.push(...written);
+        const prunedNote = pruned.length
+          ? ` Dropped ${pruned.length} fact(s) this resume no longer supports.`
+          : "";
+        logger.info(
+          `Stored ${written.length} resume fact(s)${prunedNote}`,
+          { resumeVersionId: row.id, factKeys: written, pruned },
+        );
         await addCommandEvent(
           context.command.id,
           "resume_facts_extracted",
-          `Stored ${written.length} resume fact(s) for form filling and matching.`,
-          { resumeVersionId: row.id, factKeys: written, skipped: facts.length - written.length },
+          `Stored ${written.length} resume fact(s) for form filling and matching.${prunedNote}`,
+          {
+            resumeVersionId: row.id,
+            factKeys: written,
+            pruned,
+            skipped: facts.length - written.length,
+          },
         );
       } catch (error) {
         const message = error instanceof Error ? error.message : "Unknown fact extraction error";

@@ -1,6 +1,6 @@
 import { neon } from "@neondatabase/serverless";
 import { drizzle } from "drizzle-orm/neon-http";
-import { and, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, notInArray, or, sql } from "drizzle-orm";
 import * as schema from "../../src/db/schema";
 import { getConfig } from "./config";
 import type { NormalizedJobInput, WorkerSpawnableCommandType } from "./types";
@@ -397,14 +397,21 @@ export async function getCandidateFactsForUser(userId: string) {
 /**
  * Writes freshly extracted facts. A fact the user has verified is never overwritten —
  * re-syncing a resume must not silently undo a correction.
- * Returns the keys actually written.
+ *
+ * Facts the previous resume supported but this one does not are removed, or replacing a
+ * resume would leave stale numbers behind that still look valid and would still auto-fill
+ * applications. Verified facts and anything the user entered by hand always survive.
+ *
+ * Returns the keys written and the stale keys dropped.
  */
 export async function upsertCandidateFacts(input: {
   userId: string;
   resumeVersionId: string;
   facts: ResumeFact[];
-}): Promise<string[]> {
-  if (!input.facts.length) return [];
+}): Promise<{ written: string[]; pruned: string[] }> {
+  // An empty extraction is treated as "the model found nothing", not as "this candidate
+  // has no facts". Pruning on an empty result would wipe good data after one bad run.
+  if (!input.facts.length) return { written: [], pruned: [] };
   const database = getWorkerDb();
   const now = new Date();
   const written: string[] = [];
@@ -439,7 +446,22 @@ export async function upsertCandidateFacts(input: {
     if (row) written.push(row.factKey);
   }
 
-  return written;
+  const extractedKeys = input.facts.map((fact) => fact.key);
+  const pruned = await database
+    .delete(schema.candidateFacts)
+    .where(
+      and(
+        eq(schema.candidateFacts.userId, input.userId),
+        // Only machine-read facts. A verified or hand-entered fact is the user's, not
+        // this resume's, so it is never dropped.
+        eq(schema.candidateFacts.verified, false),
+        eq(schema.candidateFacts.source, "resume"),
+        notInArray(schema.candidateFacts.factKey, extractedKeys),
+      ),
+    )
+    .returning({ factKey: schema.candidateFacts.factKey });
+
+  return { written, pruned: pruned.map((row) => row.factKey) };
 }
 
 export async function persistMatchReview(input: {
