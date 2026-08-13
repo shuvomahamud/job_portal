@@ -207,14 +207,41 @@ export async function resumeCommandAfterBrowserIntervention(commandId: string, u
         ]),
       ),
     )
-    .returning({ id: schema.commands.id, type: schema.commands.type });
+    .returning({
+      id: schema.commands.id,
+      type: schema.commands.type,
+      parentCommandId: schema.commands.parentCommandId,
+    });
   if (!command) return null;
+
+  // The apply phase created alongside discovery still points at this command id. Keep
+  // it behind the resumed discovery instead of letting it observe the old failure before
+  // the browser search has had time to finish. If matching is still running then, the
+  // normal apply-cycle handler will defer itself again.
+  if (command.parentCommandId && command.type === "find_matching_jobs") {
+    await database
+      .update(schema.commands)
+      .set({
+        scheduledFor: new Date(Date.now() + 20 * 60_000),
+        updatedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(schema.commands.parentCommandId, command.parentCommandId),
+          eq(schema.commands.type, "run_apply_cycle"),
+          eq(schema.commands.status, "pending"),
+        ),
+      );
+  }
 
   await database.insert(schema.commandEvents).values({
     commandId: command.id,
     eventType: "resumed_after_browser_intervention",
     message: "Human verification was durably confirmed; the blocked command was queued to resume.",
-    metadataJson: { requestedBy: userId },
+    metadataJson: {
+      requestedBy: userId,
+      dependentApplyPhaseDelayed: command.type === "find_matching_jobs",
+    },
   });
   return command;
 }

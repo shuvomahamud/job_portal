@@ -23,6 +23,8 @@ async function main() {
     dashboardBaseUrl: cfg.DASHBOARD_BASE_URL,
     pollIntervalSeconds: cfg.WORKER_POLL_INTERVAL_SECONDS,
     commandTypes,
+    browserChannel: cfg.JOB_BROWSER_CHANNEL ?? "bundled",
+    browserHeadless: cfg.JOB_BROWSER_HEADLESS,
     ollamaModel: commandTypes.includes("run_local_llm_extraction") ? cfg.OLLAMA_MODEL : null,
   }, null, 2));
 }

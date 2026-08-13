@@ -284,6 +284,13 @@ final class ConfigStore {
             values[Key.applyMaxPerRun] = legacyLimit
         }
         if values.isEmpty { values = Self.defaults() }
+        // Older saved configs predate the browser-engine field. Leaving the key absent
+        // silently launches Playwright's Chrome for Testing, which Indeed repeatedly
+        // challenges even after a human completes the checkbox. Preserve an explicit
+        // "bundled" choice, but migrate a missing legacy value to installed Chrome.
+        if values[Key.browserChannel] == nil {
+            values[Key.browserChannel] = "chrome"
+        }
         if let configured = values[Key.commandTypes] {
             var commands = configured.split(separator: ",").map(String.init)
             if !commands.contains("open_browser_login") {
@@ -387,7 +394,7 @@ final class ConfigStore {
         if bool(Key.browserHeadless) {
             result.append("Run hidden is on — job sites are more likely to show a “verify you are human” challenge")
         }
-        if get(Key.browserChannel).isEmpty {
+        if get(Key.browserChannel) == "bundled" {
             result.append("Browser engine is bundled Chromium — Google Chrome passes bot checks more reliably")
         }
         return result
@@ -1210,7 +1217,7 @@ final class MainWindowController: NSWindowController, NSTextFieldDelegate, NSTex
         headlessSwitch.state = config.bool(Key.browserHeadless) ? .on : .off
         discoverySwitch.state = config.bool(Key.browserDiscovery) ? .on : .off
         applyEnabledSwitch.state = config.bool(Key.applyEnabled) ? .on : .off
-        browserEnginePopup.selectItem(at: config.get(Key.browserChannel) == "chrome" ? 0 : 1)
+        browserEnginePopup.selectItem(at: config.get(Key.browserChannel) == "bundled" ? 1 : 0)
 
         switch config.get(Key.applyMode) {
         case "fill_only": applyModePopup.selectItem(at: 1)
@@ -1244,7 +1251,7 @@ final class MainWindowController: NSWindowController, NSTextFieldDelegate, NSTex
         config.set(Key.browserHeadless, headlessSwitch.state == .on ? "true" : "false")
         config.set(Key.browserDiscovery, discoverySwitch.state == .on ? "true" : "false")
         config.set(Key.applyEnabled, applyEnabledSwitch.state == .on ? "true" : "false")
-        config.set(Key.browserChannel, browserEnginePopup.indexOfSelectedItem == 0 ? "chrome" : "")
+        config.set(Key.browserChannel, browserEnginePopup.indexOfSelectedItem == 0 ? "chrome" : "bundled")
 
         switch applyModePopup.indexOfSelectedItem {
         case 1: config.set(Key.applyMode, "fill_only")

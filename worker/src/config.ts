@@ -22,6 +22,11 @@ export const boolFromEnv = (defaultValue: boolean) =>
     return value;
   }, z.boolean().default(defaultValue));
 
+export const browserChannelFromEnv = z.preprocess(
+  (value) => value === "bundled" ? undefined : value,
+  z.enum(["chrome", "msedge", "chrome-beta"]).optional(),
+);
+
 const envSchema = z.object({
   DATABASE_URL: z.string().min(1),
   DASHBOARD_BASE_URL: z.string().url(),
@@ -55,7 +60,10 @@ const envSchema = z.object({
   JOB_BROWSER_MAX_PAGES_PER_SEARCH: intFromEnv(3, 1, 10),
   // "chrome" uses the installed Google Chrome binary instead of Playwright's bundled
   // Chromium. Still a separate profile directory, so the personal Chrome profile is untouched.
-  JOB_BROWSER_CHANNEL: z.enum(["chrome", "msedge", "chrome-beta"]).optional(),
+  // The Mac app writes "bundled" explicitly when that troubleshooting option is
+  // selected. Treat it as no Playwright channel; a missing value is different because
+  // the Mac app migrates missing legacy settings to installed Chrome.
+  JOB_BROWSER_CHANNEL: browserChannelFromEnv,
   JOB_BROWSER_CDP_URL: z.string().url().optional(),
   JOB_BROWSER_CDP_MANAGE_PAGES: boolFromEnv(false),
   JOB_BROWSER_CDP_CONNECT_TIMEOUT_MS: intFromEnv(30000, 5000, 120000),
