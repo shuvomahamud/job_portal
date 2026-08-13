@@ -4,6 +4,7 @@ import {
   containsTerm,
   normalizeLocationText,
   pickAddressForJob,
+  previewAddressChoices,
   suggestedTermsForCity,
 } from "../../src/lib/addressPolicy";
 import { addressToSavedAnswers, type CandidateAddressRow } from "../src/formfill/answerBank";
@@ -119,6 +120,52 @@ test("the chosen address becomes the address answers, line2 folded in", () => {
     "12 Broad St, Apt 4",
     "line2 is appended when present",
   );
+});
+
+test("the dashboard preview reports the same choice the apply run makes", () => {
+  const locations = [
+    { location: "New York, NY, US", remoteType: null },
+    { location: "Albany, NY", remoteType: null },
+    { location: "Remote, US", remoteType: "remote" },
+  ];
+  const rows = previewAddressChoices(both, locations);
+
+  assert.deepEqual(
+    rows.map((row) => [row.location, row.label]),
+    [
+      ["New York, NY, US", "New York City"],
+      ["Albany, NY", "Albany"],
+      ["Remote, US", "New York City"],
+    ],
+  );
+  // Whatever the preview claims must be what pickAddressForJob actually returns.
+  for (const [index, job] of locations.entries()) {
+    assert.equal(rows[index]!.label, pickAddressForJob(both, job)!.address.label);
+  }
+  assert.equal(rows[2]!.usedFallback, true, "remote is a fallback, and is labelled so");
+  assert.equal(rows[0]!.usedFallback, false);
+});
+
+test("the preview collapses duplicate locations and keeps order", () => {
+  const rows = previewAddressChoices(both, [
+    { location: "New York, NY, US" },
+    { location: "new york,  ny,  us" },
+    { location: "Albany, NY" },
+  ]);
+  assert.equal(rows.length, 2, "the same place written differently is one row");
+  assert.deepEqual(rows.map((row) => row.label), ["New York City", "Albany"]);
+});
+
+test("the preview explains itself when no addresses are on file", () => {
+  const rows = previewAddressChoices([], [{ location: "New York, NY" }]);
+  assert.equal(rows[0]!.label, null);
+  assert.match(rows[0]!.reason, /profile address/);
+});
+
+test("a missing location is shown rather than dropped", () => {
+  const rows = previewAddressChoices(both, [{ location: null }]);
+  assert.equal(rows[0]!.location, "(no location given)");
+  assert.equal(rows[0]!.label, "New York City");
 });
 
 test("address answers carry the profile id prefix so applyPolicy treats them as identity", () => {

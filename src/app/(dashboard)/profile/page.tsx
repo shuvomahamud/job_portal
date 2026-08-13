@@ -1,4 +1,4 @@
-import { desc, eq } from "drizzle-orm";
+import { desc, eq, sql } from "drizzle-orm";
 import {
   BookOpenText,
   Link2,
@@ -14,9 +14,10 @@ import {
   candidateFacts,
   candidateProfiles,
   commonAnswers,
+  jobs,
   resumeVersions,
 } from "@/db/schema";
-import { SUGGESTED_MATCH_TERMS } from "@/lib/addressPolicy";
+import { previewAddressChoices, SUGGESTED_MATCH_TERMS } from "@/lib/addressPolicy";
 import { PageHeader, SectionHeading } from "@/components/ui";
 import { requireDashboardUser } from "@/lib/auth";
 import {
@@ -116,10 +117,15 @@ function AddressForm({ address }: { address?: AddressRow }) {
   );
 }
 
-export default async function ProfilePage() {
+export default async function ProfilePage({
+  searchParams,
+}: {
+  searchParams: Promise<{ tryLocation?: string }>;
+}) {
   const user = await requireDashboardUser();
   const db = getDb();
-  const [profiles, resumes, answers, facts, addresses] = await Promise.all([
+  const tryLocation = (await searchParams).tryLocation?.trim() || null;
+  const [profiles, resumes, answers, facts, addresses, jobLocations] = await Promise.all([
     db
       .select()
       .from(candidateProfiles)
@@ -145,10 +151,26 @@ export default async function ProfilePage() {
       .from(candidateAddresses)
       .where(eq(candidateAddresses.userId, user.id))
       .orderBy(desc(candidateAddresses.isPrimary), candidateAddresses.label),
+    // Most common real posting locations, so the preview reflects actual data.
+    db
+      .select({
+        location: jobs.location,
+        remoteType: jobs.remoteType,
+        count: sql<number>`count(*)::int`,
+      })
+      .from(jobs)
+      .groupBy(jobs.location, jobs.remoteType)
+      .orderBy(desc(sql`count(*)`))
+      .limit(10),
   ]);
   const profile = profiles[0];
   const factByKey = new Map(facts.map((fact) => [fact.factKey, fact]));
   const usableFactCount = facts.filter(factIsUsable).length;
+  // A typed location is checked first so the answer is easy to find in the table.
+  const previewRows = previewAddressChoices(addresses, [
+    ...(tryLocation ? [{ location: tryLocation, remoteType: null }] : []),
+    ...jobLocations,
+  ]);
 
   return (
     <>
@@ -455,6 +477,72 @@ export default async function ProfilePage() {
           <p className="mb-4 font-semibold text-[var(--ink)]">Add an address</p>
           <AddressForm />
         </div>
+
+        {addresses.length > 0 && (
+          <div className="mt-6">
+            <p className="font-semibold text-[var(--ink)]">
+              What an apply run would do
+            </p>
+            <p className="mt-1 text-sm text-[var(--muted)]">
+              Resolved with the same function the worker uses, over the posting locations
+              already in your jobs list. If a row looks wrong, adjust that address&rsquo;s
+              nearby terms.
+            </p>
+
+            <form className="mt-4 flex flex-wrap items-end gap-2">
+              <label className="field flex-1 min-w-60">
+                <span>Try any location</span>
+                <input
+                  name="tryLocation"
+                  defaultValue={tryLocation ?? ""}
+                  placeholder="Poughkeepsie, NY"
+                />
+              </label>
+              <button className="primary-button">Check</button>
+            </form>
+
+            <div className="mt-4 overflow-x-auto">
+              <table className="w-full min-w-[34rem] border-collapse text-sm">
+                <thead>
+                  <tr className="border-b border-[var(--line)] text-left text-xs uppercase tracking-wide text-[var(--muted)]">
+                    <th className="py-2 pr-4 font-semibold">Posting location</th>
+                    <th className="py-2 pr-4 font-semibold">Address used</th>
+                    <th className="py-2 font-semibold">Why</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {previewRows.map((row) => (
+                    <tr
+                      key={row.location}
+                      className="border-b border-[var(--line)] align-top last:border-0"
+                    >
+                      <td className="py-2 pr-4 font-mono text-xs text-[var(--ink)]">
+                        {row.location}
+                      </td>
+                      <td className="py-2 pr-4">
+                        <span className="font-semibold text-[var(--ink)]">{row.label}</span>
+                        {row.usedFallback && (
+                          <span className="ml-2 source-chip">fallback</span>
+                        )}
+                      </td>
+                      <td className="py-2 text-xs leading-5 text-[var(--muted)]">
+                        {row.reason}
+                      </td>
+                    </tr>
+                  ))}
+                  {!previewRows.length && (
+                    <tr>
+                      <td colSpan={3} className="py-3 text-sm text-[var(--muted)]">
+                        No jobs discovered yet, so there are no real locations to check.
+                        Type one above to test it.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
       </section>
 
       <section className="panel mt-6 p-5 sm:p-7">

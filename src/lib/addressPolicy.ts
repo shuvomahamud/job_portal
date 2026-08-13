@@ -1,8 +1,9 @@
 /**
  * Picks which of the candidate's addresses to put on an application.
  *
- * Lives in src/lib so the dashboard and the worker share one definition of "nearest";
- * the worker picks the address, and the profile page reuses the suggested match terms.
+ * Lives in src/lib so the dashboard and the worker share one definition of "nearest".
+ * The worker picks the address during an apply run; the profile page runs the same
+ * function over real posting locations so the choice can be checked before a run.
  *
  * Deliberately deterministic rather than geocoded: real postings carry explicit city text
  * ("New York, NY, US", "Long Island City, NY, US", "Albany, NY"), so matching city and
@@ -144,4 +145,43 @@ export function pickAddressForJob<T extends AddressLike>(
     matchedTerm: best.matchedTerm,
     score: best.score,
   };
+}
+
+export type AddressPreviewRow = {
+  location: string;
+  /** Null only when no addresses are on file, i.e. the profile address would be used. */
+  label: string | null;
+  reason: string;
+  /** True when the choice came from the primary fallback rather than a location match. */
+  usedFallback: boolean;
+};
+
+/**
+ * Resolves a set of posting locations through the exact function an apply run uses, so
+ * the dashboard can show what would happen rather than describing it. Duplicate
+ * locations collapse, and order is preserved.
+ */
+export function previewAddressChoices<T extends AddressLike>(
+  addresses: T[],
+  jobs: JobLocationInput[],
+): AddressPreviewRow[] {
+  const seen = new Set<string>();
+  const rows: AddressPreviewRow[] = [];
+
+  for (const job of jobs) {
+    const label = (job.location ?? "").trim();
+    const key = normalizeLocationText(label);
+    if (seen.has(key)) continue;
+    seen.add(key);
+
+    const choice = pickAddressForJob(addresses, job);
+    rows.push({
+      location: label || "(no location given)",
+      label: choice?.address.label ?? null,
+      reason: choice?.reason ?? "No addresses on file; the profile address is used.",
+      usedFallback: choice ? choice.matchedTerm === null : false,
+    });
+  }
+
+  return rows;
 }
