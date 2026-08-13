@@ -278,7 +278,10 @@ function detectVisaSignal(text: string) {
   if (/u\.?s\.? citizens? only|citizenship required|must be a us citizen/i.test(text)) return "citizen_only";
   if (/\b(gc|green card)\s*(\/|or)?\s*(usc|u\.?s\.? citizen)|usc\s*(\/|or)?\s*gc/i.test(text)) return "gc_usc_only";
   if (/security clearance|active clearance|secret clearance|top secret/i.test(text)) return "clearance_required";
-  if (/no sponsorship|no visa sponsorship|visa sponsorship is not available|sponsorship is not available|do not provide visa sponsorship|unable to sponsor|cannot sponsor|without sponsorship|will not sponsor|requiring visa sponsorship will not be considered/i.test(text)) return "no_sponsorship";
+  const sponsorshipUnavailable = /no sponsorship|no visa sponsorship|visa sponsorship is not available|sponsorship is not available|do not provide visa sponsorship|unable to sponsor|cannot sponsor|without sponsorship|will not sponsor|requiring visa sponsorship will not be considered/i.test(text);
+  const contractOpportunity = /\b(contract(?:or)?|contract-to-hire|contract to hire|c2h|c2c|corp-to-corp|w2)\b/i.test(text);
+  if (sponsorshipUnavailable && contractOpportunity) return "contract_no_sponsorship";
+  if (sponsorshipUnavailable) return "no_sponsorship";
   if (/h-?1b transfer/i.test(text)) return "h1b_transfer_explicit";
   if (/sponsorship.*available|visa sponsorship|will sponsor|sponsor.*visa/i.test(text)) return "sponsorship_available";
   if (/\b(contract|contract-to-hire|c2h|c2c|corp-to-corp|w2)\b/i.test(text)) return "contract_likely";

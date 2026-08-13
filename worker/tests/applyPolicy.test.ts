@@ -155,6 +155,36 @@ test("an ordinary rule-matched salary still requires a question", () => {
   assert.equal(action.kind, "ask");
 });
 
+test("candidate-authorized contractor sponsorship answer may fill", () => {
+  const action = decideFieldAction({
+    field: field({
+      fieldCategory: "sponsorship_required",
+      riskLevel: "MEDIUM",
+      labelText: "Will you require sponsorship?",
+      normalizedQuestion: "sponsorship",
+      inputType: "select",
+      options: ["Yes", "No"],
+      confidence: 0.97,
+    }),
+    match: {
+      fieldId: "f1",
+      savedAnswerId: "derived:authorization:sponsorship_required",
+      matchType: "rule",
+      confidence: 0.93,
+      reason: "conditional profile policy",
+      requiresReview: true,
+    },
+    savedAnswer: answer({
+      id: "derived:authorization:sponsorship_required",
+      category: "sponsorship_required",
+      answerValue: "No",
+    }),
+    suggestedValue: "No",
+    trustLlmAnswers: false,
+  });
+  assert.deepEqual(action, { kind: "fill", value: "No", source: "rule" });
+});
+
 test("decideFieldAction fills exact low-risk matches", () => {
   const action = decideFieldAction({
     field: field(),

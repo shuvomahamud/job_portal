@@ -125,6 +125,8 @@ export async function handleApplyToJobs(
             location: job.location,
             remoteType: job.remoteType,
             salaryText: job.salaryText,
+            employmentType: job.employmentType,
+            visaSignal: job.visaSignal,
           },
           mode,
           page,

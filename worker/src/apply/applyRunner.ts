@@ -95,6 +95,8 @@ export type ApplyJobInput = {
     remoteType?: string | null;
     /** Explicit posting pay text used by the candidate-authorized salary policy. */
     salaryText?: string | null;
+    employmentType?: string | null;
+    visaSignal?: string | null;
   };
   mode?: ApplyMode;
   page: PageLike;
@@ -490,6 +492,9 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
       jobLocation: input.job.location,
       remoteType: input.job.remoteType,
       salaryText: input.job.salaryText,
+      jobTitle: input.job.title,
+      employmentType: input.job.employmentType,
+      visaSignal: input.job.visaSignal,
     });
     const answers = bank.answers;
     if (bank.addressLabel) {
@@ -532,6 +537,20 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
           minimum: bank.salaryDecision.minimum,
           maximum: bank.salaryDecision.maximum,
           reason: bank.salaryDecision.reason,
+        },
+      );
+    }
+    if (bank.authorizationDecision) {
+      await addCommandEvent(
+        input.commandId,
+        "apply_authorization_policy_selected",
+        `Selected sponsorship=${bank.authorizationDecision.sponsorshipRequired} for this ${bank.authorizationDecision.isContractRole ? "contractor" : "direct-employment"} role.`,
+        {
+          jobId: input.job.id,
+          isContractRole: bank.authorizationDecision.isContractRole,
+          workAuthorization: bank.authorizationDecision.workAuthorization,
+          sponsorshipRequired: bank.authorizationDecision.sponsorshipRequired,
+          reason: bank.authorizationDecision.reason,
         },
       );
     }

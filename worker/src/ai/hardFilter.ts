@@ -11,6 +11,18 @@ function needsSponsorship(candidate: CandidateMatchingContext) {
     !/do not require|does not require|no sponsorship required|not require sponsorship/.test(answer);
 }
 
+const AUTHORIZED_CONTRACT_MARKER = "[authorized-contract-alternative]";
+
+function allowsAuthorizedContractAlternative(candidate: CandidateMatchingContext) {
+  return `${candidate.sponsorshipAnswer} ${candidate.matchingInstructions ?? ""}`
+    .toLowerCase()
+    .includes(AUTHORIZED_CONTRACT_MARKER);
+}
+
+function isContractOpportunity(text: string) {
+  return /\b(contract(?:or)?|contract-to-hire|contract to hire|c2h|c2c|corp-to-corp|w2)\b/.test(text);
+}
+
 function candidateClaimsCitizenship(candidate: CandidateMatchingContext) {
   return /u\.?s\.?\s*citizen|united states citizen/i.test(`${candidate.workAuthorizationAnswer} ${candidate.summary}`);
 }
@@ -46,8 +58,12 @@ export function evaluateProfileHardFilter(candidate: CandidateMatchingContext, j
     visaSignal = "clearance_required";
   }
   if (/no sponsorship|no visa sponsorship|visa sponsorship is not available|sponsorship is not available|do not provide visa sponsorship|unable to sponsor|cannot sponsor|without sponsorship|will not sponsor|requiring visa sponsorship will not be considered/.test(text) && needsSponsorship(candidate)) {
-    reasons.push("The posting says sponsorship is unavailable while the profile indicates sponsorship or transfer is needed.");
-    visaSignal = "no_sponsorship";
+    const contractAlternative =
+      allowsAuthorizedContractAlternative(candidate) && isContractOpportunity(text);
+    if (!contractAlternative) {
+      reasons.push("The posting says sponsorship is unavailable while the profile indicates sponsorship or transfer is needed.");
+      visaSignal = "no_sponsorship";
+    }
   }
 
   for (const dealBreaker of candidate.dealBreakers) {

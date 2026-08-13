@@ -41,7 +41,6 @@ const negativeRules: RulePattern[] = [
   { label: "citizen only", patterns: [/u\.?s\.? citizens? only/i, /citizenship required/i, /must be a us citizen/i], score: -55 },
   { label: "GC/USC only", patterns: [/\b(gc|green card)\s*(\/|or)?\s*(usc|u\.?s\.? citizen)/i, /usc\s*(\/|or)?\s*gc/i], score: -55 },
   { label: "clearance required", patterns: [/security clearance/i, /active clearance/i, /secret clearance/i, /top secret/i], score: -45 },
-  { label: "no sponsorship", patterns: [/no sponsorship/i, /unable to sponsor/i, /cannot sponsor/i, /without sponsorship/i, /will not sponsor/i], score: -50 },
   { label: "unrelated Java-only", patterns: [/java developer/i, /spring boot/i], score: -18 },
   { label: "unrelated Python-only", patterns: [/python developer/i, /django/i, /flask/i], score: -14 },
   { label: "architect-heavy", patterns: [/principal architect/i, /enterprise architect/i, /solutions architect/i], score: -16 },
@@ -85,7 +84,16 @@ function detectVisaSignal(text: string): { signal: string; notes: string; penalt
   if (/security clearance|active clearance|secret clearance|top secret/i.test(text)) {
     return { signal: "clearance_required", notes: "Job appears to require security clearance; skip unless manually confirmed otherwise.", penalty: 45 };
   }
-  if (/no sponsorship|no visa sponsorship|visa sponsorship is not available|sponsorship is not available|do not provide visa sponsorship|unable to sponsor|cannot sponsor|without sponsorship|will not sponsor|requiring visa sponsorship will not be considered/i.test(text)) {
+  const sponsorshipUnavailable = /no sponsorship|no visa sponsorship|visa sponsorship is not available|sponsorship is not available|do not provide visa sponsorship|unable to sponsor|cannot sponsor|without sponsorship|will not sponsor|requiring visa sponsorship will not be considered/i.test(text);
+  const contractOpportunity = /\b(contract(?:or)?|contract-to-hire|contract to hire|c2h|c2c|corp-to-corp|w2)\b/i.test(text);
+  if (sponsorshipUnavailable && contractOpportunity) {
+    return {
+      signal: "contract_no_sponsorship",
+      notes: "Sponsorship is unavailable, but the posting is a contractor opportunity and the configured candidate policy does not require sponsorship for contractor roles.",
+      penalty: 0,
+    };
+  }
+  if (sponsorshipUnavailable) {
     return { signal: "no_sponsorship", notes: "Job says sponsorship is not available; skip for H-1B transfer search.", penalty: 50 };
   }
   if (/h-?1b transfer/i.test(text)) {
@@ -169,7 +177,7 @@ export function evaluateJob(job: NormalizedJobInput & { id?: string }): RuleFilt
   const hasTargetStack = techStack.some((tech) => [".NET", "C#", "SQL", "Oracle", "Production Support"].includes(tech));
   const hasSupportOrDotnet = techStack.some((tech) => [".NET", "C#", "Production Support"].includes(tech)) || /application support|production support|\.net|asp\.net|c#/i.test(text);
   const disqualifyingVisa = ["citizen_only", "gc_usc_only", "clearance_required", "no_sponsorship"].includes(visa.signal);
-  const contractFriendly = ["h1b_transfer_explicit", "sponsorship_available", "contract_vendor_likely", "contract_likely"].includes(visa.signal);
+  const contractFriendly = ["h1b_transfer_explicit", "sponsorship_available", "contract_vendor_likely", "contract_likely", "contract_no_sponsorship"].includes(visa.signal);
   const fullTimeUnknown = detectEmploymentType(text, job.employmentType) === "full-time" && visa.signal === "unknown";
 
   if (contractFriendly && hasSupportOrDotnet) {

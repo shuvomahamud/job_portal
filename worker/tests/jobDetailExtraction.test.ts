@@ -79,12 +79,22 @@ test("extractJobDetail falls back without throwing", () => {
   assert.equal(detail.sourceUrl, "not a url");
 });
 
-test("extractJobDetail lets negative sponsorship wording win", () => {
+test("extractJobDetail preserves the contract alternative when sponsorship is unavailable", () => {
   const detail = extractJobDetail(
     "indeed",
     "https://www.indeed.com/viewjob?jk=no-sponsor",
     "<html><body><h1>.NET Developer</h1><div>No visa sponsorship is available for this W2 contract role.</div></body></html>",
     { query: ".NET Developer", location: "Remote" },
   );
-  assert.equal(detail.visaSignal, "no_sponsorship");
+  assert.equal(detail.visaSignal, "contract_no_sponsorship");
+});
+
+test("extractJobDetail distinguishes a contract path with no direct sponsorship", () => {
+  const detail = extractJobDetail(
+    "indeed",
+    "https://www.indeed.com/viewjob?jk=contract1",
+    `<html><body><h1>Senior .NET Contractor</h1><div id="jobDescriptionText">${"C# .NET SQL Azure contract role. ".repeat(20)} W2 contract through a staffing vendor. No visa sponsorship is available.</div></body></html>`,
+    { query: ".NET", location: "Remote" },
+  );
+  assert.equal(detail.visaSignal, "contract_no_sponsorship");
 });

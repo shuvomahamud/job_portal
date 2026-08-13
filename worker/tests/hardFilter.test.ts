@@ -39,6 +39,39 @@ test("hard filter rejects no-sponsorship roles for sponsorship-dependent profile
   if (!result.eligible) assert.equal(result.visaSignal, "no_sponsorship");
 });
 
+test("hard filter keeps no-sponsorship contract roles when the profile authorizes a vendor path", () => {
+  const contractCandidate = {
+    ...candidate,
+    sponsorshipAnswer:
+      "[authorized-contract-alternative] I need H-1B transfer for direct employment but may contract through an authorized employer/vendor.",
+    matchingInstructions:
+      "[authorized-contract-alternative] Keep contract roles for employer/vendor authorization review.",
+  };
+  const result = evaluateProfileHardFilter(contractCandidate, {
+    ...job,
+    employmentType: "contract",
+    description: `${job.description} This is a W2 contract role. No visa sponsorship is available.`,
+  });
+  assert.deepEqual(result, { eligible: true });
+});
+
+test("contract alternative never bypasses a no-sponsorship permanent role", () => {
+  const contractCandidate = {
+    ...candidate,
+    sponsorshipAnswer:
+      "[authorized-contract-alternative] I need H-1B transfer for direct employment but may contract through an authorized employer/vendor.",
+    matchingInstructions:
+      "[authorized-contract-alternative] Keep contract roles for employer/vendor authorization review.",
+  };
+  const result = evaluateProfileHardFilter(contractCandidate, {
+    ...job,
+    employmentType: "full-time",
+    description: `${job.description} Permanent full-time position. No visa sponsorship is available.`,
+  });
+  assert.equal(result.eligible, false);
+  if (!result.eligible) assert.equal(result.visaSignal, "no_sponsorship");
+});
+
 test("hard filter rejects incomplete placeholder postings", () => {
   const result = evaluateProfileHardFilter(candidate, { ...job, title: ".NET Developer discovered job", description: "Open the source to verify details." });
   assert.equal(result.eligible, false);

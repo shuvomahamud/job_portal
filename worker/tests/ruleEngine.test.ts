@@ -53,7 +53,7 @@ test("evaluateJob skips no-sponsorship jobs even when stack matches", () => {
   assert.equal(result.visaSignal, "no_sponsorship");
 });
 
-test("evaluateJob treats no visa sponsorship as a hard negative", () => {
+test("evaluateJob accepts a matching W2 contract without sponsorship", () => {
   const result = evaluateJob({
     title: ".NET Application Support Developer",
     company: "Enterprise Co",
@@ -63,9 +63,24 @@ test("evaluateJob treats no visa sponsorship as a hard negative", () => {
     description: "Remote W2 contract role for C# ASP.NET SQL application support. No visa sponsorship is available.",
   });
 
-  assert.equal(result.recommendation, "skip");
-  assert.equal(result.status, "archived");
-  assert.equal(result.visaSignal, "no_sponsorship");
+  assert.equal(result.recommendation, "apply");
+  assert.equal(result.status, "ready_to_apply");
+  assert.equal(result.visaSignal, "contract_no_sponsorship");
+});
+
+test("evaluateJob accepts another matching no-sponsorship contract role", () => {
+  const result = evaluateJob({
+    title: "Senior .NET Developer",
+    company: "Example Staffing",
+    location: "Remote",
+    source: "other",
+    sourceUrl: "https://example.com/job/contract-no-sponsor",
+    employmentType: "contract",
+    description: "C# ASP.NET SQL Server Azure role. W2 contract through a staffing vendor. No visa sponsorship is available.",
+  });
+  assert.equal(result.visaSignal, "contract_no_sponsorship");
+  assert.equal(result.recommendation, "apply");
+  assert.equal(result.status, "ready_to_apply");
 });
 
 test("evaluateJob skips citizen-only clearance jobs", () => {

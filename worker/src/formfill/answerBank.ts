@@ -11,6 +11,10 @@ import {
 import { normalizeQuestion } from "./questionNormalizer";
 import { getRiskLevel } from "./riskPolicy";
 import {
+  authorizationToSavedAnswers,
+  type AuthorizationDecision,
+} from "./authorizationPolicy";
+import {
   recommendSalaryAnswer,
   usesPostedRangeSalaryPolicy,
   type SalaryRecommendation,
@@ -336,6 +340,9 @@ export async function loadAnswerBank(
     jobLocation?: string | null;
     remoteType?: string | null;
     salaryText?: string | null;
+    jobTitle?: string | null;
+    employmentType?: string | null;
+    visaSignal?: string | null;
   },
   database?: AnswerDb,
 ): Promise<SavedAnswer[]> {
@@ -352,6 +359,9 @@ export async function loadAnswerBankWithContext(
     jobLocation?: string | null;
     remoteType?: string | null;
     salaryText?: string | null;
+    jobTitle?: string | null;
+    employmentType?: string | null;
+    visaSignal?: string | null;
   },
   database?: AnswerDb,
 ): Promise<{
@@ -359,6 +369,7 @@ export async function loadAnswerBankWithContext(
   addressLabel: string | null;
   addressReason: string | null;
   salaryDecision: SalaryRecommendation | null;
+  authorizationDecision: AuthorizationDecision | null;
 }> {
   const db = dbOrDefault(database);
   const companyKey = input.company.trim().toLowerCase();
@@ -424,12 +435,19 @@ export async function loadAnswerBankWithContext(
   const salary = usesPostedRangeSalaryPolicy(profile?.salaryExpectation)
     ? salaryToSavedAnswers(input.salaryText)
     : { answers: [], decision: null };
+  const authorization = authorizationToSavedAnswers({
+    sponsorshipAnswer: profile?.sponsorshipAnswer,
+    matchingInstructions: profile?.matchingInstructions,
+    jobTitle: input.jobTitle,
+    employmentType: input.employmentType,
+    visaSignal: input.visaSignal,
+  });
 
   return {
     answers: assembleAnswerBank({
       jobAnswers,
       companyAnswers,
-      dynamicAnswers: salary.answers,
+      dynamicAnswers: [...authorization.answers, ...salary.answers],
       profileAnswers: [...address.answers, ...profileAnswers],
       globalAnswers,
       factAnswers,
@@ -438,6 +456,7 @@ export async function loadAnswerBankWithContext(
     addressLabel: address.label,
     addressReason: address.reason,
     salaryDecision: salary.decision,
+    authorizationDecision: authorization.decision,
   };
 }
 
