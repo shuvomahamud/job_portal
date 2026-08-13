@@ -1,5 +1,5 @@
 import "server-only";
-import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, sql } from "drizzle-orm";
 import { getDb } from "@/db";
 import { applications, commands, jobs, pendingQuestions } from "@/db/schema";
 
@@ -19,7 +19,19 @@ export type ApplyCyclePhase =
   | "scoring"
   | "waiting"
   | "applying"
+  | "failed"
   | "idle";
+
+/** How far back a failed command still counts as "your last run". */
+const FAILURE_LOOKBACK_HOURS = 24;
+
+/** Command type names are internal; these are what the step is called on screen. */
+const STEP_LABELS: Record<string, string> = {
+  run_apply_cycle: "cycle",
+  find_matching_jobs: "search",
+  run_local_llm_extraction: "scoring",
+  apply_to_jobs: "apply",
+};
 
 export type ApplyCycleStatus = {
   running: boolean;
@@ -29,6 +41,17 @@ export type ApplyCycleStatus = {
   startedAt: string | null;
   /** When the apply phase is scheduled to begin, if it is still waiting. */
   nextApplyAt: string | null;
+  /**
+   * The most recent step that failed, if any. Without this a failed command simply
+   * vanishes from the in-flight query and the card reads "No apply cycle is running" —
+   * indistinguishable from a run that found nothing, which is how a rejected discovery
+   * payload went unnoticed for a whole run.
+   */
+  lastFailure: {
+    step: string;
+    message: string;
+    failedAt: string | null;
+  } | null;
   counts: {
     applied: number;
     awaitingAnswer: number;
@@ -76,7 +99,9 @@ function iso(value: Date | string | null | undefined): string | null {
 export async function getApplyCycleStatus(userId: string): Promise<ApplyCycleStatus> {
   const db = getDb();
 
-  const [active, statusRows, questionRows, recentRows] = await Promise.all([
+  const failureCutoff = new Date(Date.now() - FAILURE_LOOKBACK_HOURS * 60 * 60 * 1000);
+
+  const [active, statusRows, questionRows, recentRows, failureRows] = await Promise.all([
     db
       .select({
         id: commands.id,
@@ -118,7 +143,33 @@ export async function getApplyCycleStatus(userId: string): Promise<ApplyCycleSta
       .where(eq(applications.userId, userId))
       .orderBy(desc(applications.updatedAt))
       .limit(10),
+    db
+      .select({
+        type: commands.type,
+        errorMessage: commands.errorMessage,
+        completedAt: commands.completedAt,
+      })
+      .from(commands)
+      .where(
+        and(
+          eq(commands.requestedBy, userId),
+          inArray(commands.type, [...CYCLE_TYPES]),
+          eq(commands.status, "failed"),
+          gte(commands.createdAt, failureCutoff),
+        ),
+      )
+      .orderBy(desc(commands.createdAt))
+      .limit(1),
   ]);
+
+  const failure = failureRows[0];
+  const lastFailure = failure
+    ? {
+        step: failure.type,
+        message: failure.errorMessage ?? "The step failed without recording a reason.",
+        failedAt: iso(failure.completedAt),
+      }
+    : null;
 
   const byStatus = new Map(statusRows.map((row) => [row.status, row.count]));
   const counts = {
@@ -139,6 +190,18 @@ export async function getApplyCycleStatus(userId: string): Promise<ApplyCycleSta
   }));
 
   if (!active.length) {
+    if (lastFailure) {
+      return {
+        running: false,
+        phase: "failed",
+        detail: `The last run stopped at the ${STEP_LABELS[lastFailure.step] ?? lastFailure.step} step: ${lastFailure.message}`,
+        startedAt: null,
+        nextApplyAt: null,
+        counts,
+        recent,
+        lastFailure,
+      };
+    }
     return {
       running: false,
       phase: "idle",
@@ -147,6 +210,7 @@ export async function getApplyCycleStatus(userId: string): Promise<ApplyCycleSta
       nextApplyAt: null,
       counts,
       recent,
+      lastFailure,
     };
   }
 
@@ -164,6 +228,7 @@ export async function getApplyCycleStatus(userId: string): Promise<ApplyCycleSta
       nextApplyAt: null,
       counts,
       recent,
+      lastFailure,
     };
   }
   if (has("run_local_llm_extraction")) {
@@ -175,6 +240,7 @@ export async function getApplyCycleStatus(userId: string): Promise<ApplyCycleSta
       nextApplyAt: null,
       counts,
       recent,
+      lastFailure,
     };
   }
   if (has("find_matching_jobs")) {
@@ -186,6 +252,7 @@ export async function getApplyCycleStatus(userId: string): Promise<ApplyCycleSta
       nextApplyAt: null,
       counts,
       recent,
+      lastFailure,
     };
   }
 
@@ -199,6 +266,7 @@ export async function getApplyCycleStatus(userId: string): Promise<ApplyCycleSta
       nextApplyAt: iso(applyPhase.scheduledFor),
       counts,
       recent,
+      lastFailure,
     };
   }
 
@@ -210,5 +278,6 @@ export async function getApplyCycleStatus(userId: string): Promise<ApplyCycleSta
     nextApplyAt: null,
     counts,
     recent,
+    lastFailure,
   };
 }

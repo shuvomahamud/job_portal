@@ -2,15 +2,20 @@
 
 import { useCallback, useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { CircleDot, LoaderCircle, Play } from "lucide-react";
+import { CircleDot, LoaderCircle, Play, TriangleAlert } from "lucide-react";
 import { startApplyCycle } from "@/app/(dashboard)/actions";
 
 type Status = {
   running: boolean;
-  phase: "queued" | "searching" | "scoring" | "waiting" | "applying" | "idle";
+  phase: "queued" | "searching" | "scoring" | "waiting" | "applying" | "failed" | "idle";
   detail: string;
   startedAt: string | null;
   nextApplyAt: string | null;
+  lastFailure: {
+    step: string;
+    message: string;
+    failedAt: string | null;
+  } | null;
   counts: {
     applied: number;
     awaitingAnswer: number;
@@ -34,6 +39,7 @@ const PHASE_LABEL: Record<Status["phase"], string> = {
   scoring: "Scoring matches",
   waiting: "Waiting to apply",
   applying: "Applying",
+  failed: "Last run failed",
   idle: "Idle",
 };
 
@@ -114,6 +120,8 @@ export function ApplyCycleControl({ initial }: { initial: Status }) {
           <div className="flex items-center gap-2">
             {status.running ? (
               <LoaderCircle className="size-4 animate-spin text-[var(--accent-dark)]" />
+            ) : status.phase === "failed" ? (
+              <TriangleAlert className="size-4 text-amber-600" />
             ) : (
               <CircleDot className="size-4 text-[var(--muted)]" />
             )}
@@ -124,10 +132,19 @@ export function ApplyCycleControl({ initial }: { initial: Status }) {
               <span className="source-chip">{elapsed(status.startedAt)}</span>
             )}
           </div>
-          <p className="mt-2 max-w-xl text-sm leading-6 text-[var(--muted)]">
+          <p
+            className={`mt-2 max-w-xl text-sm leading-6 ${
+              status.phase === "failed" ? "text-amber-700" : "text-[var(--muted)]"
+            }`}
+          >
             {status.detail}
             {status.nextApplyAt && ` Applying starts around ${clockTime(status.nextApplyAt)}.`}
           </p>
+          {status.phase === "failed" && (
+            <p className="mt-1 text-xs text-[var(--muted)]">
+              Nothing was added to the board. Fix the cause, then run the cycle again.
+            </p>
+          )}
         </div>
 
         <div className="flex flex-wrap items-end gap-4">
