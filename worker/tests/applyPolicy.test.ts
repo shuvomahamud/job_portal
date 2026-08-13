@@ -103,6 +103,58 @@ test("decideFieldAction asks for sensitive categories without exact matches", ()
   assert.equal(action.kind, "ask");
 });
 
+test("candidate-authorized job salary may fill from an explicit posting range", () => {
+  const action = decideFieldAction({
+    field: field({
+      fieldCategory: "expected_salary",
+      riskLevel: "MEDIUM",
+      labelText: "Expected annual salary",
+      normalizedQuestion: "expected salary",
+      confidence: 0.92,
+    }),
+    match: {
+      fieldId: "f1",
+      savedAnswerId: "derived:salary:expected_salary",
+      matchType: "rule",
+      confidence: 0.93,
+      reason: "job range",
+      requiresReview: true,
+    },
+    savedAnswer: answer({
+      id: "derived:salary:expected_salary",
+      category: "expected_salary",
+      answerValue: "180000",
+    }),
+    suggestedValue: "180000",
+    trustLlmAnswers: false,
+  });
+  assert.deepEqual(action, { kind: "fill", value: "180000", source: "rule" });
+});
+
+test("an ordinary rule-matched salary still requires a question", () => {
+  const action = decideFieldAction({
+    field: field({
+      fieldCategory: "expected_salary",
+      riskLevel: "MEDIUM",
+      labelText: "Expected annual salary",
+      normalizedQuestion: "expected salary",
+      confidence: 0.92,
+    }),
+    match: {
+      fieldId: "f1",
+      savedAnswerId: "a1",
+      matchType: "rule",
+      confidence: 0.93,
+      reason: "category",
+      requiresReview: true,
+    },
+    savedAnswer: answer({ category: "expected_salary", answerValue: "180000" }),
+    suggestedValue: "180000",
+    trustLlmAnswers: false,
+  });
+  assert.equal(action.kind, "ask");
+});
+
 test("decideFieldAction fills exact low-risk matches", () => {
   const action = decideFieldAction({
     field: field(),

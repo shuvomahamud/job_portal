@@ -10,6 +10,11 @@ import {
 } from "../../../src/lib/addressPolicy";
 import { normalizeQuestion } from "./questionNormalizer";
 import { getRiskLevel } from "./riskPolicy";
+import {
+  recommendSalaryAnswer,
+  usesPostedRangeSalaryPolicy,
+  type SalaryRecommendation,
+} from "./salaryPolicy";
 import { FIELD_CATEGORIES, type DetectedField, type FieldCategory, type SavedAnswer } from "./types";
 
 export type AnswerScope = "global" | "company" | "job";
@@ -173,6 +178,7 @@ export function factsToSavedAnswers(rows: CandidateFactRow[]): SavedAnswer[] {
 export function assembleAnswerBank(parts: {
   jobAnswers: SavedAnswer[];
   companyAnswers: SavedAnswer[];
+  dynamicAnswers?: SavedAnswer[];
   profileAnswers: SavedAnswer[];
   globalAnswers: SavedAnswer[];
   factAnswers: SavedAnswer[];
@@ -183,11 +189,49 @@ export function assembleAnswerBank(parts: {
   return [
     ...parts.jobAnswers,
     ...parts.companyAnswers,
+    ...(parts.dynamicAnswers ?? []),
     ...parts.profileAnswers,
     ...parts.globalAnswers,
     ...parts.factAnswers,
     ...parts.commonAnswers,
   ];
+}
+
+export function salaryToSavedAnswers(salaryText: string | null | undefined): {
+  answers: SavedAnswer[];
+  decision: SalaryRecommendation | null;
+} {
+  const annual = recommendSalaryAnswer(salaryText, "expected_salary");
+  const hourly = annual ? null : recommendSalaryAnswer(salaryText, "desired_rate");
+  const decision = annual ?? hourly;
+  if (!decision) return { answers: [], decision: null };
+
+  const category: FieldCategory = decision.period === "annual" ? "expected_salary" : "desired_rate";
+  const label = decision.period === "annual" ? "Expected salary" : "Desired hourly rate";
+  return {
+    answers: [
+      {
+        id: `derived:salary:${category}`,
+        normalizedQuestion: normalizeQuestion(label),
+        originalQuestion: label,
+        category,
+        answerValue: decision.value,
+        answerType: "text",
+        sitePattern: "",
+        domain: "",
+        usageCount: 0,
+        createdAt: new Date(0).toISOString(),
+        updatedAt: new Date(0).toISOString(),
+        riskLevel: "MEDIUM",
+        notes: `Candidate-authorized job-range policy. ${decision.reason}`,
+        aliases:
+          decision.period === "annual"
+            ? ["expected salary", "salary expectation", "expected annual salary"]
+            : ["desired rate", "hourly rate", "rate expectation"],
+      },
+    ],
+    decision,
+  };
 }
 
 export function profileToSavedAnswers(profile: AnswerBankProfile): SavedAnswer[] {
@@ -291,6 +335,7 @@ export async function loadAnswerBank(
     /** Posting location, used to choose the nearest address on file. */
     jobLocation?: string | null;
     remoteType?: string | null;
+    salaryText?: string | null;
   },
   database?: AnswerDb,
 ): Promise<SavedAnswer[]> {
@@ -306,9 +351,15 @@ export async function loadAnswerBankWithContext(
     domain: string;
     jobLocation?: string | null;
     remoteType?: string | null;
+    salaryText?: string | null;
   },
   database?: AnswerDb,
-): Promise<{ answers: SavedAnswer[]; addressLabel: string | null; addressReason: string | null }> {
+): Promise<{
+  answers: SavedAnswer[];
+  addressLabel: string | null;
+  addressReason: string | null;
+  salaryDecision: SalaryRecommendation | null;
+}> {
   const db = dbOrDefault(database);
   const companyKey = input.company.trim().toLowerCase();
 
@@ -370,11 +421,15 @@ export async function loadAnswerBankWithContext(
 
   const commonMapped = commonRows.map(commonAnswerToSavedAnswer);
   const factAnswers = factsToSavedAnswers(factRows);
+  const salary = usesPostedRangeSalaryPolicy(profile?.salaryExpectation)
+    ? salaryToSavedAnswers(input.salaryText)
+    : { answers: [], decision: null };
 
   return {
     answers: assembleAnswerBank({
       jobAnswers,
       companyAnswers,
+      dynamicAnswers: salary.answers,
       profileAnswers: [...address.answers, ...profileAnswers],
       globalAnswers,
       factAnswers,
@@ -382,6 +437,7 @@ export async function loadAnswerBankWithContext(
     }),
     addressLabel: address.label,
     addressReason: address.reason,
+    salaryDecision: salary.decision,
   };
 }
 

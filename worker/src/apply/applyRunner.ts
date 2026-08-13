@@ -93,6 +93,8 @@ export type ApplyJobInput = {
     /** Drives which address on file gets filled in. */
     location?: string | null;
     remoteType?: string | null;
+    /** Explicit posting pay text used by the candidate-authorized salary policy. */
+    salaryText?: string | null;
   };
   mode?: ApplyMode;
   page: PageLike;
@@ -463,6 +465,7 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
       })(),
       jobLocation: input.job.location,
       remoteType: input.job.remoteType,
+      salaryText: input.job.salaryText,
     });
     const answers = bank.answers;
     if (bank.addressLabel) {
@@ -474,6 +477,21 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
           jobId: input.job.id,
           addressLabel: bank.addressLabel,
           jobLocation: input.job.location ?? null,
+        },
+      );
+    }
+    if (bank.salaryDecision) {
+      await addCommandEvent(
+        input.commandId,
+        "apply_salary_derived",
+        `Derived a ${bank.salaryDecision.period} compensation answer from the posting's explicit pay range.`,
+        {
+          jobId: input.job.id,
+          salaryText: input.job.salaryText ?? null,
+          target: bank.salaryDecision.target,
+          minimum: bank.salaryDecision.minimum,
+          maximum: bank.salaryDecision.maximum,
+          reason: bank.salaryDecision.reason,
         },
       );
     }

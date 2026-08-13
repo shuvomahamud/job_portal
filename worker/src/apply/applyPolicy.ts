@@ -59,6 +59,20 @@ export function decideFieldAction(input: DecideFieldInput): FieldAction {
     return { kind: "ask", reason: "Answer does not match available options." };
   }
 
+  const isAuthorizedJobSalary =
+    savedAnswer?.id.startsWith("derived:salary:") &&
+    ["expected_salary", "desired_rate"].includes(field.fieldCategory);
+  if (
+    isAuthorizedJobSalary &&
+    value &&
+    matchType &&
+    ["exact", "normalized", "alias", "rule"].includes(matchType) &&
+    matchConfidence >= 0.9 &&
+    field.confidence >= 0.7
+  ) {
+    return { kind: "fill", value, source: matchType };
+  }
+
   if (categoryAlwaysRequiresReview(field.fieldCategory)) {
     if (
       value &&
