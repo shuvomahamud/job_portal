@@ -19,12 +19,25 @@ export class BrowserInterventionRequiredError extends Error {
 }
 
 const CAPTCHA_TEXT =
-  /captcha|verify (?:that )?you are (?:a )?human|unusual traffic|security check|press and hold|complete the challenge|cloudflare ray id/i;
+  /verify (?:that )?you are (?:a )?human|unusual traffic|security check|press and hold|complete the challenge|cloudflare ray id/i;
 const ACCESS_DENIED_TEXT =
   /access denied|temporarily blocked|request blocked|automated traffic|forbidden|too many requests/i;
 const LOGIN_TEXT =
   /sign in to continue|log in to continue|please sign in|please log in|session (?:has )?expired|sign in to apply|log in to apply/i;
 const LOGIN_URL = /\/(?:login|signin|sign-in|auth)(?:[/?#]|$)|secure\.indeed\.com\/account/i;
+
+async function hasVisibleChallengeElement(page: PageLike): Promise<boolean> {
+  const candidates = page.locator(
+    'iframe[src*="recaptcha" i], iframe[src*="hcaptcha" i], iframe[src*="challenge" i], [data-sitekey], input[name="cf-turnstile-response"]',
+  );
+  const count = await candidates.count().catch(() => 0);
+  for (let index = 0; index < count; index += 1) {
+    if (await candidates.nth(index).isVisible({ timeout: 500 }).catch(() => false)) {
+      return true;
+    }
+  }
+  return false;
+}
 
 export function siteFromUrl(rawUrl: string): BrowserBlockerSite {
   try {
@@ -53,19 +66,17 @@ export async function detectBrowserBlocker(
     .replace(/\s+/g, " ")
     .slice(0, 30_000);
 
-  const captchaFrame = await page
-    .locator(
-      'iframe[src*="recaptcha" i], iframe[src*="hcaptcha" i], iframe[src*="challenge" i], [data-sitekey], input[name="cf-turnstile-response"]',
-    )
-    .count()
-    .catch(() => 0);
-  if (captchaFrame > 0 || CAPTCHA_TEXT.test(body)) {
+  // Indeed embeds invisible reCAPTCHA frames on ordinary search-result pages. Presence
+  // alone is therefore not evidence of a blocker; the challenge element must be visible
+  // (or the page itself must contain explicit human-verification language).
+  const visibleCaptcha = await hasVisibleChallengeElement(page);
+  if (visibleCaptcha || CAPTCHA_TEXT.test(body)) {
     return {
       kind: "captcha",
       site,
       pageUrl,
       message: `${site === "unknown" ? "A job site" : site} needs a CAPTCHA or human verification solved in the worker browser.`,
-      evidence: captchaFrame > 0 ? "CAPTCHA/challenge element detected." : "Human-verification text detected.",
+      evidence: visibleCaptcha ? "Visible CAPTCHA/challenge element detected." : "Human-verification text detected.",
     };
   }
 

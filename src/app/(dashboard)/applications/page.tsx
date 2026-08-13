@@ -16,6 +16,7 @@ import { EmptyState, PageHeader, SectionHeading, StatusBadge } from "@/component
 import { getApplyCycleStatus } from "@/services/applyCycle";
 import { requireDashboardUser } from "@/lib/auth";
 import { formatDate, formatDateTime } from "@/lib/format";
+import { MAX_APPLICATIONS_PER_RUN } from "@/lib/runLimits";
 import {
   reverifySubmission,
   resolveSubmissionUnknown,
@@ -111,7 +112,13 @@ export default async function ApplicationsPage({
         description="Live apply pipeline status, stop reasons, and controls. Artifacts stay on the Mac disk."
       />
 
-      <ApplyCycleControl initial={cycleStatus} />
+      <ApplyCycleControl
+        initial={cycleStatus}
+        initialMaxJobs={Math.min(
+          MAX_APPLICATIONS_PER_RUN,
+          Math.max(1, roles.find((role) => role.active)?.maxApplicationsPerRun ?? 20),
+        )}
+      />
 
       <section className="mb-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <div className="panel p-4">

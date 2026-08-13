@@ -5,6 +5,7 @@ import { addCommandEvent, getCommandStatus, recoverStaleClaims } from "./db";
 import { dispatchCommand, supportedPhase2CommandTypes } from "./dispatcher";
 import { logger } from "./logger";
 import { verifyOllamaHealth } from "./ai/ollamaClient";
+import { acquireWorkerProcessLock } from "./processLock";
 import type { DashboardCommand } from "./types";
 
 let stopping = false;
@@ -68,6 +69,7 @@ async function processCommand(command: DashboardCommand) {
 
 export async function runWorkerLoop() {
   const cfg = getConfig();
+  const workerLock = acquireWorkerProcessLock(cfg.WORKER_ID);
   const commandTypes = cfg.workerCommandTypes.filter((type) => supportedPhase2CommandTypes().includes(type));
   if (!commandTypes.length) {
     throw new Error(`No Phase 2 command types enabled. Supported: ${supportedPhase2CommandTypes().join(", ")}`);
@@ -99,17 +101,23 @@ export async function runWorkerLoop() {
   let idlePolls = 0;
   let nextRecoveryAt = 0;
   let consecutiveClaimFailures = 0;
+  // Four missed beats is enough to prove a worker is gone, while leaving ample room for
+  // a temporarily slow database request. This replaces the old one-hour dead period.
+  const staleClaimMinutes = Math.max(
+    3,
+    Math.ceil((cfg.WORKER_HEARTBEAT_INTERVAL_SECONDS * 4) / 60),
+  );
 
   while (!stopping) {
     const now = Date.now();
     if (now >= nextRecoveryAt) {
       try {
-        const recovered = await recoverStaleClaims(60);
+        const recovered = await recoverStaleClaims(staleClaimMinutes);
         if (recovered.length) logger.warn("Recovered stale claimed commands", { commandIds: recovered });
       } catch (error) {
         logger.warn("Stale claim recovery failed", { error: error instanceof Error ? error.message : "Unknown error" });
       }
-      nextRecoveryAt = now + 15 * 60 * 1000;
+      nextRecoveryAt = now + 60 * 1000;
     }
 
     let claimed = 0;
@@ -162,6 +170,7 @@ export async function runWorkerLoop() {
   }
 
   logger.info("Worker stopped.");
+  workerLock.release();
 }
 
 if (process.argv[1]?.endsWith("worker/src/runner.ts")) {

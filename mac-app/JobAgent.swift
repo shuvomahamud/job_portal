@@ -509,7 +509,7 @@ final class WorkerController {
             throw ServiceError(message: "Browser CDP URL must be a loopback HTTP URL with a port.")
         }
         if cdpIsReachable(endpoint) {
-            appendLog("reusing dedicated Chrome on (rawEndpoint)")
+            appendLog("reusing dedicated Chrome on \(rawEndpoint)")
             return
         }
 
@@ -540,7 +540,7 @@ final class WorkerController {
         let deadline = Date().addingTimeInterval(10)
         while Date() < deadline {
             if cdpIsReachable(endpoint) {
-                appendLog("started ordinary dedicated Chrome on (rawEndpoint)")
+                appendLog("started ordinary dedicated Chrome on \(rawEndpoint)")
                 return
             }
             Thread.sleep(forTimeInterval: 0.2)
@@ -555,8 +555,8 @@ final class WorkerController {
             notify(title: "Node not found", body: "Expected node at \(nodeBin). Rebuild with mac-app/build.sh.")
             return
         }
-        let tsx = "\(repoDir)/node_modules/.bin/tsx"
-        if !FileManager.default.fileExists(atPath: tsx) {
+        let tsxPackage = "\(repoDir)/node_modules/tsx/package.json"
+        if !FileManager.default.fileExists(atPath: tsxPackage) {
             notify(title: "Dependencies missing", body: "Run npm install in \(repoDir) first.")
             return
         }
@@ -586,7 +586,9 @@ final class WorkerController {
 
         let task = Process()
         task.executableURL = URL(fileURLWithPath: nodeBin)
-        task.arguments = [tsx, "worker/src/runner.ts"]
+        // Launch the runner directly in this Node process. The old .bin/tsx wrapper
+        // spawned a grandchild that could survive when JobAgent exited or was replaced.
+        task.arguments = ["--import", "tsx", "worker/src/runner.ts"]
         task.currentDirectoryURL = URL(fileURLWithPath: repoDir)
 
         // dotenv does not overwrite existing variables, so these take precedence over
@@ -639,6 +641,23 @@ final class WorkerController {
         appendLog("--- stop requested (graceful) ---")
         setState(.stopping)
         kill(task.processIdentifier, SIGTERM)
+    }
+
+    /// App termination must not orphan a worker that can keep claiming commands after a
+    /// replacement JobAgent starts. Give the direct Node runner a brief graceful window,
+    /// then make the shutdown definitive.
+    func shutdownForAppExit() {
+        guard let task = process, task.isRunning else { return }
+        appendLog("--- app exiting; stopping worker ---")
+        kill(task.processIdentifier, SIGTERM)
+        let deadline = Date().addingTimeInterval(2)
+        while task.isRunning && Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        if task.isRunning {
+            appendLog("--- worker did not exit promptly; force killing ---")
+            kill(task.processIdentifier, SIGKILL)
+        }
     }
 
     func notify(title: String, body: String) {
@@ -1737,6 +1756,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Closing the window must not stop the agent; the menu bar item stays in charge.
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         false
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        worker.shutdownForAppExit()
     }
 
     /// Clicking the Dock icon after closing the window brings it back.

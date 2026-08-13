@@ -74,13 +74,19 @@ function elapsed(from: string | null) {
 
 type Source = "indeed" | "dice";
 
-export function ApplyCycleControl({ initial }: { initial: Status }) {
+export function ApplyCycleControl({
+  initial,
+  initialMaxJobs,
+}: {
+  initial: Status;
+  initialMaxJobs: number;
+}) {
   const router = useRouter();
   const [status, setStatus] = useState<Status>(initial);
   const [message, setMessage] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
   const [sources, setSources] = useState<Source[]>(["indeed", "dice"]);
-  const [maxJobs, setMaxJobs] = useState(20);
+  const [maxJobs, setMaxJobs] = useState(initialMaxJobs);
 
   function toggleSource(source: Source) {
     setSources((current) =>
