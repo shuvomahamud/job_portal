@@ -7,8 +7,19 @@ export type HardFilterResult =
 function needsSponsorship(candidate: CandidateMatchingContext) {
   const answer = `${candidate.workAuthorizationAnswer} ${candidate.sponsorshipAnswer}`.toLowerCase();
   if (!answer) return false;
-  return /h-?1b|sponsor|sponsorship|transfer|require(?:s|d)?\s+(?:visa\s+)?sponsor/.test(answer) &&
-    !/do not require|does not require|no sponsorship required|not require sponsorship/.test(answer);
+  if (!/h-?1b|sponsor|sponsorship|transfer|require(?:s|d)?\s+(?:visa\s+)?sponsor/.test(answer)) {
+    return false;
+  }
+  // A profile carrying the contract-alternative marker is stating a conditional:
+  // sponsorship is needed in general, and contract work is the single exception. Its
+  // "do not require sponsorship for contract roles" clause is scoped to that exception,
+  // but this check reads the whole answer as one string, so without this guard the scoped
+  // clause clears the global need and every permanent role refusing sponsorship sails
+  // through the filter. The contract exception is applied later, per posting.
+  if (allowsAuthorizedContractAlternative(candidate)) return true;
+  return !/do not require|does not require|no sponsorship required|not require sponsorship/.test(
+    answer,
+  );
 }
 
 const AUTHORIZED_CONTRACT_MARKER = "[authorized-contract-alternative]";
