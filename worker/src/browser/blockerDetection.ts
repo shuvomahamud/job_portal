@@ -23,7 +23,7 @@ const CAPTCHA_TEXT =
 const ACCESS_DENIED_TEXT =
   /access denied|temporarily blocked|request blocked|automated traffic|forbidden|too many requests/i;
 const LOGIN_TEXT =
-  /sign in to continue|log in to continue|please sign in|please log in|session (?:has )?expired|sign in to apply|log in to apply/i;
+  /sign in to continue|log in to continue|session (?:has )?expired|authentication required/i;
 const LOGIN_URL = /\/(?:login|signin|sign-in|auth)(?:[/?#]|$)|secure\.indeed\.com\/account/i;
 
 async function hasVisibleChallengeElement(page: PageLike): Promise<boolean> {

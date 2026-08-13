@@ -173,6 +173,29 @@ export async function getCommandStatus(commandId: string) {
   return row?.status ?? null;
 }
 
+type DependentApplyPhase = {
+  status: string;
+  payloadJson: Record<string, unknown>;
+  resultJson: Record<string, unknown> | null;
+};
+
+export function shouldResumeDependentApplyPhase(
+  phase: DependentApplyPhase,
+  blockedCommandId: string,
+): boolean {
+  const matchingCommandIds = phase.payloadJson.matchingCommandIds;
+  if (
+    phase.payloadJson.phase !== "apply" ||
+    !Array.isArray(matchingCommandIds) ||
+    !matchingCommandIds.includes(blockedCommandId)
+  ) {
+    return false;
+  }
+  if (phase.status === "pending") return true;
+  return phase.status === "completed" &&
+    String(phase.resultJson?.message ?? "").startsWith("Discovery or scoring failed");
+}
+
 /**
  * Put the exact command that raised a browser-intervention alert back on the queue.
  * Reusing its id is important: apply-cycle dependency commands already point at that
@@ -214,24 +237,47 @@ export async function resumeCommandAfterBrowserIntervention(commandId: string, u
     });
   if (!command) return null;
 
-  // The apply phase created alongside discovery still points at this command id. Keep
-  // it behind the resumed discovery instead of letting it observe the old failure before
-  // the browser search has had time to finish. If matching is still running then, the
-  // normal apply-cycle handler will defer itself again.
+  // The apply phase created alongside discovery still points at this command id. It may
+  // still be pending, or it may already have completed early after observing the browser
+  // failure. Put either form back behind the resumed discovery. If matching is still
+  // running when it wakes, the normal apply-cycle handler will defer itself again.
+  let dependentApplyPhaseIds: string[] = [];
   if (command.parentCommandId && command.type === "find_matching_jobs") {
-    await database
-      .update(schema.commands)
-      .set({
-        scheduledFor: new Date(Date.now() + 20 * 60_000),
-        updatedAt: new Date(),
+    const phases = await database
+      .select({
+        id: schema.commands.id,
+        status: schema.commands.status,
+        payloadJson: schema.commands.payloadJson,
+        resultJson: schema.commands.resultJson,
       })
+      .from(schema.commands)
       .where(
         and(
           eq(schema.commands.parentCommandId, command.parentCommandId),
           eq(schema.commands.type, "run_apply_cycle"),
-          eq(schema.commands.status, "pending"),
+          inArray(schema.commands.status, ["pending", "completed"]),
         ),
       );
+    dependentApplyPhaseIds = phases
+      .filter((phase) => shouldResumeDependentApplyPhase(phase, command.id))
+      .map((phase) => phase.id);
+
+    if (dependentApplyPhaseIds.length) {
+      await database
+        .update(schema.commands)
+        .set({
+          status: "pending",
+          scheduledFor: new Date(Date.now() + 20 * 60_000),
+          claimedBy: null,
+          claimedAt: null,
+          heartbeatAt: null,
+          completedAt: null,
+          resultJson: null,
+          errorMessage: null,
+          updatedAt: new Date(),
+        })
+        .where(inArray(schema.commands.id, dependentApplyPhaseIds));
+    }
   }
 
   await database.insert(schema.commandEvents).values({
@@ -240,7 +286,7 @@ export async function resumeCommandAfterBrowserIntervention(commandId: string, u
     message: "Human verification was durably confirmed; the blocked command was queued to resume.",
     metadataJson: {
       requestedBy: userId,
-      dependentApplyPhaseDelayed: command.type === "find_matching_jobs",
+      dependentApplyPhaseIds,
     },
   });
   return command;

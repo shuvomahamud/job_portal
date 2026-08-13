@@ -62,3 +62,22 @@ test("does not mistake a normal result page for a blocker", async () => {
   );
   assert.equal(blocker, null);
 });
+
+test("ignores Dice's optional login prompt on a normal results page", async () => {
+  const blocker = await detectBrowserBlocker(
+    page(
+      "https://www.dice.com/jobs?q=.NET",
+      "Senior .NET Engineer at Acme. To see how well you match this job, please log in or create an account.",
+    ),
+    "dice",
+  );
+  assert.equal(blocker, null);
+});
+
+test("still detects an explicit login gate", async () => {
+  const blocker = await detectBrowserBlocker(
+    page("https://www.dice.com/jobs?q=.NET", "Please log in to continue"),
+    "dice",
+  );
+  assert.equal(blocker?.kind, "login_required");
+});
