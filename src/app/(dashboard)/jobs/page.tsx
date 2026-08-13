@@ -120,6 +120,8 @@ export default async function JobsPage({
                   <th>Role</th>
                   <th>Source</th>
                   <th>Fit</th>
+                  <th>AI verdict</th>
+                  <th>Application</th>
                   <th>Workflow</th>
                   <th>Added</th>
                   <th aria-label="Actions" />
@@ -140,10 +142,33 @@ export default async function JobsPage({
                       <span className="source-chip">{humanize(job.source)}</span>
                     </td>
                     <td>
-                      {job.fitScore === null ? (
+                      {job.matchScore === null ? (
                         <span className="text-xs text-[var(--muted)]">Unscored</span>
                       ) : (
-                        <span className="score-pill">{job.fitScore}</span>
+                        <span className="score-pill">{job.matchScore}</span>
+                      )}
+                    </td>
+                    <td className="whitespace-nowrap">
+                      {job.matchStatus ? (
+                        <span className="source-chip">{humanize(job.matchStatus)}</span>
+                      ) : (
+                        <span className="text-xs text-[var(--muted)]">Not scored yet</span>
+                      )}
+                    </td>
+                    <td className="whitespace-nowrap">
+                      {job.applicationStatus ? (
+                        <div>
+                          <span className="source-chip">
+                            {humanize(job.applicationStatus)}
+                          </span>
+                          {job.appliedAt && (
+                            <p className="mt-1 text-xs text-[var(--muted)]">
+                              {formatDate(job.appliedAt)}
+                            </p>
+                          )}
+                        </div>
+                      ) : (
+                        <span className="text-xs text-[var(--muted)]">Not applied</span>
                       )}
                     </td>
                     <td className="min-w-[250px]">
