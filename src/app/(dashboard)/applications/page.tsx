@@ -11,11 +11,12 @@ import {
   resumeVersions,
   targetRoles,
 } from "@/db/schema";
+import { ApplyCycleControl } from "@/components/apply-cycle-control";
 import { EmptyState, PageHeader, SectionHeading, StatusBadge } from "@/components/ui";
+import { getApplyCycleStatus } from "@/services/applyCycle";
 import { requireDashboardUser } from "@/lib/auth";
 import { formatDate, formatDateTime } from "@/lib/format";
 import {
-  queueApplyNow,
   reverifySubmission,
   resolveSubmissionUnknown,
   safeRetryApplication,
@@ -31,6 +32,8 @@ export default async function ApplicationsPage({
   const user = await requireDashboardUser();
   const params = await searchParams;
   const db = getDb();
+
+  const cycleStatus = await getApplyCycleStatus(user.id);
 
   const conditions = [eq(applications.userId, user.id)];
   if (params.status) conditions.push(eq(applications.status, params.status as typeof applications.$inferSelect.status));
@@ -106,14 +109,9 @@ export default async function ApplicationsPage({
         eyebrow="Command center"
         title="Applications"
         description="Live apply pipeline status, stop reasons, and controls. Artifacts stay on the Mac disk."
-        action={
-          <form action={queueApplyNow.bind(null, undefined)}>
-            <button className="primary-button" type="submit">
-              Run apply cycle
-            </button>
-          </form>
-        }
       />
+
+      <ApplyCycleControl initial={cycleStatus} />
 
       <section className="mb-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <div className="panel p-4">

@@ -27,6 +27,7 @@ import {
 import { FOLLOWUP_STATUSES } from "@/lib/constants";
 import { isResumeHealthyForActivation } from "@/lib/resumeHealth";
 import { followupUpdateSchema } from "@/lib/validation";
+import { hasApplyCycleInFlight } from "@/services/applyCycle";
 import { cancelCommand, createCommand, getCommandDetail } from "@/services/commands";
 
 const requiredString = (formData: FormData, key: string) =>
@@ -545,27 +546,64 @@ export async function dismissPendingQuestion(formData: FormData) {
   revalidatePath("/questions");
 }
 
-export async function queueApplyNow(jobId?: string) {
+/**
+ * Starts an apply cycle, refusing when one is already in flight.
+ *
+ * Returns a result rather than throwing: a thrown server action renders the global error
+ * page, which is why clicking this button used to look like nothing happened. Without the
+ * guard, each click queued another full cycle — repeated clicks became repeated
+ * applications to the same jobs, not a harmless no-op.
+ */
+export async function startApplyCycle(): Promise<{ ok: boolean; message: string }> {
   const user = await requireDashboardUser();
-  if (jobId) {
-    await createCommand(
-      {
-        type: "apply_to_jobs",
-        payloadJson: { jobIds: [z.uuid().parse(jobId)] },
-        priority: "high",
-      },
-      { source: "dashboard", requestedBy: user.id },
-    );
-  } else {
-    await createCommand(
-      {
-        type: "run_apply_cycle",
-        payloadJson: { phase: "discover" },
-        priority: "normal",
-      },
-      { source: "dashboard", requestedBy: user.id },
-    );
+
+  if (await hasApplyCycleInFlight(user.id)) {
+    return {
+      ok: false,
+      message: "An apply cycle is already running. Watch its progress below.",
+    };
   }
+
+  const [activeRole] = await getDb()
+    .select({ id: targetRoles.id })
+    .from(targetRoles)
+    .where(and(eq(targetRoles.userId, user.id), eq(targetRoles.active, true)))
+    .limit(1);
+  if (!activeRole) {
+    return {
+      ok: false,
+      message: "No active role. Activate a role with a resume on /roles first.",
+    };
+  }
+
+  await createCommand(
+    {
+      type: "run_apply_cycle",
+      payloadJson: { phase: "discover" },
+      priority: "normal",
+    },
+    { source: "dashboard", requestedBy: user.id },
+  );
+
+  revalidatePath("/applications");
+  revalidatePath("/commands");
+  return {
+    ok: true,
+    message: "Apply cycle started. Searching job boards now — progress appears below.",
+  };
+}
+
+/** Applies to one specific job now. Whole-cycle runs go through startApplyCycle. */
+export async function queueApplyNow(jobId: string) {
+  const user = await requireDashboardUser();
+  await createCommand(
+    {
+      type: "apply_to_jobs",
+      payloadJson: { jobIds: [z.uuid().parse(jobId)] },
+      priority: "high",
+    },
+    { source: "dashboard", requestedBy: user.id },
+  );
   revalidatePath("/applications");
   revalidatePath("/commands");
   revalidatePath("/jobs");

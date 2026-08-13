@@ -114,9 +114,11 @@ export async function getDashboardSummary(userId: string) {
                 href: "/jobs?status=needs_review",
               }
             : {
-                label: "Find matching jobs",
-                detail: "Search Indeed and Dice, then let local AI review each posting",
-                href: "/",
+                // The fallback used to point at "/" — this page — so the button did
+                // nothing. Running the pipeline lives on /applications.
+                label: "Run an apply cycle",
+                detail: "Search, score and apply in one run",
+                href: "/applications",
               };
 
   const roleTotals = await getDb().execute<{
