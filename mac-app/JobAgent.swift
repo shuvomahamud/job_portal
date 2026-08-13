@@ -645,7 +645,6 @@ final class MainWindowController: NSWindowController, NSTextFieldDelegate, NSTex
     private let startButton = NSButton(title: "Start Agent", target: nil, action: nil)
     private let stopButton = NSButton(title: "Stop Agent", target: nil, action: nil)
     private let checklistStack = NSStackView()
-    private let sourcePopup = NSPopUpButton()
     private let runCycleButton = NSButton(title: "Run Cycle Now", target: nil, action: nil)
     private let logView = NSTextView()
     private var logTimer: Timer?
@@ -761,14 +760,13 @@ final class MainWindowController: NSWindowController, NSTextFieldDelegate, NSTex
         buttons.spacing = 10
 
         // Starting the agent only makes it listen; a cycle still has to be queued.
-        sourcePopup.addItems(withTitles: ["Indeed and Dice", "Indeed only", "Dice only"])
+        // Which boards to search and how many to apply to are chosen per run on the
+        // dashboard, so this button queues a default run rather than duplicating them.
         runCycleButton.target = self
         runCycleButton.action = #selector(runCycleNow)
         runCycleButton.bezelStyle = .rounded
 
-        let cycleLabel = NSTextField(labelWithString: "Search:")
-        cycleLabel.font = .systemFont(ofSize: 12)
-        let cycleRow = NSStackView(views: [cycleLabel, sourcePopup, runCycleButton])
+        let cycleRow = NSStackView(views: [runCycleButton])
         cycleRow.orientation = .horizontal
         cycleRow.alignment = .centerY
         cycleRow.spacing = 8
@@ -1436,21 +1434,13 @@ final class MainWindowController: NSWindowController, NSTextFieldDelegate, NSTex
 
     // MARK: Actions
 
-    /// Queues one apply cycle limited to the chosen job boards. The agent must be running
-    /// to pick it up, but the cycle is queued in the database either way.
+    /// Queues one default apply cycle. Board selection and the per-run limit live on the
+    /// dashboard; this is the shortcut for starting a run without opening a browser. The
+    /// agent must be running to pick it up, but the cycle is queued either way.
     @objc private func runCycleNow() {
-        let sources: String?
-        switch sourcePopup.indexOfSelectedItem {
-        case 1: sources = "indeed"
-        case 2: sources = "dice"
-        default: sources = nil
-        }
-        var arguments: [String] = []
-        if let sources { arguments = ["--sources", sources] }
-
         runCycleButton.isEnabled = false
         statusDetail.stringValue = "Queueing a cycle…"
-        ScriptRunner.run("worker/scripts/enqueueApplyCycle.ts", arguments) { [weak self] result in
+        ScriptRunner.run("worker/scripts/enqueueApplyCycle.ts", []) { [weak self] result in
             guard let self else { return }
             self.runCycleButton.isEnabled = true
             switch result {

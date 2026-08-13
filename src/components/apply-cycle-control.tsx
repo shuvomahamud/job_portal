@@ -53,11 +53,26 @@ function elapsed(from: string | null) {
   return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
 }
 
+type Source = "indeed" | "dice";
+
 export function ApplyCycleControl({ initial }: { initial: Status }) {
   const router = useRouter();
   const [status, setStatus] = useState<Status>(initial);
   const [message, setMessage] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
+  const [sources, setSources] = useState<Source[]>(["indeed", "dice"]);
+  const [maxJobs, setMaxJobs] = useState(20);
+
+  function toggleSource(source: Source) {
+    setSources((current) =>
+      current.includes(source)
+        ? // Never let both be unchecked; there would be nothing to search.
+          current.length === 1
+          ? current
+          : current.filter((item) => item !== source)
+        : [...current, source],
+    );
+  }
 
   const load = useCallback(async () => {
     try {
@@ -83,7 +98,7 @@ export function ApplyCycleControl({ initial }: { initial: Status }) {
 
   function start() {
     startTransition(async () => {
-      const result = await startApplyCycle();
+      const result = await startApplyCycle({ sources, maxJobs });
       setMessage(result.message);
       await load();
       router.refresh();
@@ -115,24 +130,64 @@ export function ApplyCycleControl({ initial }: { initial: Status }) {
           </p>
         </div>
 
-        <button
-          className="primary-button"
-          type="button"
-          onClick={start}
-          disabled={busy}
-          title={status.running ? "A cycle is already running" : undefined}
-        >
-          {busy ? (
-            <>
-              <LoaderCircle className="size-4 animate-spin" /> Running
-            </>
-          ) : (
-            <>
-              <Play className="size-4" /> Run apply cycle
-            </>
-          )}
-        </button>
+        <div className="flex flex-wrap items-end gap-4">
+          <fieldset disabled={busy} className="flex flex-wrap items-end gap-4">
+            <div>
+              <p className="mb-1 text-xs font-semibold text-[var(--muted)]">Search</p>
+              <div className="flex items-center gap-3">
+                {(["indeed", "dice"] as const).map((source) => (
+                  <label key={source} className="flex items-center gap-1.5 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={sources.includes(source)}
+                      onChange={() => toggleSource(source)}
+                    />
+                    <span className="capitalize">{source}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+            <label className="field w-28">
+              <span>Apply up to</span>
+              <input
+                type="number"
+                min={1}
+                max={50}
+                value={maxJobs}
+                onChange={(event) =>
+                  setMaxJobs(Math.min(50, Math.max(1, Number(event.target.value) || 1)))
+                }
+              />
+            </label>
+          </fieldset>
+
+          <button
+            className="primary-button"
+            type="button"
+            onClick={start}
+            disabled={busy}
+            title={status.running ? "A cycle is already running" : undefined}
+          >
+            {busy ? (
+              <>
+                <LoaderCircle className="size-4 animate-spin" /> Running
+              </>
+            ) : (
+              <>
+                <Play className="size-4" /> Run apply cycle
+              </>
+            )}
+          </button>
+        </div>
       </div>
+
+      {!status.running && sources.length > 1 && (
+        <p className="mt-3 text-xs text-[var(--muted)]">
+          Split evenly: about {Math.ceil(maxJobs / 2)} from Indeed and{" "}
+          {Math.floor(maxJobs / 2)} from Dice. If one board runs short, the other takes
+          the remainder.
+        </p>
+      )}
 
       {message && (
         <p className="mt-4 rounded-xl border border-[var(--line)] bg-[var(--soft)] p-3 text-sm text-[var(--muted)]">

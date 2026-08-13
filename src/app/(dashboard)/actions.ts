@@ -554,8 +554,21 @@ export async function dismissPendingQuestion(formData: FormData) {
  * guard, each click queued another full cycle — repeated clicks became repeated
  * applications to the same jobs, not a harmless no-op.
  */
-export async function startApplyCycle(): Promise<{ ok: boolean; message: string }> {
+export async function startApplyCycle(options?: {
+  sources?: Array<"indeed" | "dice">;
+  maxJobs?: number;
+}): Promise<{ ok: boolean; message: string }> {
   const user = await requireDashboardUser();
+
+  const input = z
+    .object({
+      sources: z.array(z.enum(["indeed", "dice"])).min(1).max(2).default(["indeed", "dice"]),
+      maxJobs: z.number().int().min(1).max(50).default(20),
+    })
+    .parse({
+      sources: options?.sources?.length ? options.sources : undefined,
+      maxJobs: options?.maxJobs,
+    });
 
   if (await hasApplyCycleInFlight(user.id)) {
     return {
@@ -579,7 +592,11 @@ export async function startApplyCycle(): Promise<{ ok: boolean; message: string 
   await createCommand(
     {
       type: "run_apply_cycle",
-      payloadJson: { phase: "discover" },
+      payloadJson: {
+        phase: "discover",
+        sources: input.sources,
+        maxJobs: input.maxJobs,
+      },
       priority: "normal",
     },
     { source: "dashboard", requestedBy: user.id },
@@ -587,9 +604,14 @@ export async function startApplyCycle(): Promise<{ ok: boolean; message: string 
 
   revalidatePath("/applications");
   revalidatePath("/commands");
+
+  const split =
+    input.sources.length > 1
+      ? ` Up to ${input.maxJobs}, split across ${input.sources.join(" and ")}.`
+      : ` Up to ${input.maxJobs} from ${input.sources[0]}.`;
   return {
     ok: true,
-    message: "Apply cycle started. Searching job boards now — progress appears below.",
+    message: `Apply cycle started. Searching now — progress appears below.${split}`,
   };
 }
 

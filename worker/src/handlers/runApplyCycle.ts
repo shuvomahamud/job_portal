@@ -54,6 +54,14 @@ export async function handleRunApplyCycle(
       };
     }
 
+    const requestedJobs = Math.min(
+      input.maxJobs ?? cfg.JOB_APPLY_MAX_PER_RUN,
+      cfg.JOB_APPLY_MAX_PER_RUN,
+    );
+    // Discovery has to out-run the target: most postings are scored uncertain or reject,
+    // so finding exactly N would leave far fewer than N eligible to apply to.
+    const maxResults = Math.min(50, Math.max(10, requestedJobs * 2));
+
     const matchingCommandIds: string[] = [];
     for (const role of roles) {
       if (context.claimGuard.lost) break;
@@ -65,7 +73,7 @@ export async function handleRunApplyCycle(
           sources: input.sources ?? [...ALL_SOURCES],
           queries: [role.title],
           locations: role.locations.length ? role.locations : ["Remote"],
-          maxResults: 10,
+          maxResults,
           targetRoleId: role.id,
         },
         priority: "normal",
@@ -157,12 +165,15 @@ export async function handleRunApplyCycle(
     cfg.JOB_APPLY_MAX_PER_RUN,
   );
 
+  const selectedSources = input.sources ?? [...ALL_SOURCES];
+
   const eligible = await database
     .select({
       jobId: schema.jobRoleMatches.jobId,
       score: schema.jobRoleMatches.score,
       targetRoleId: schema.jobRoleMatches.targetRoleId,
       roleRunLimit: schema.targetRoles.maxApplicationsPerRun,
+      source: schema.jobs.source,
     })
     .from(schema.jobRoleMatches)
     .innerJoin(schema.jobs, eq(schema.jobs.id, schema.jobRoleMatches.jobId))
@@ -172,7 +183,7 @@ export async function handleRunApplyCycle(
         eq(schema.jobRoleMatches.userId, userId),
         eq(schema.jobRoleMatches.status, ELIGIBLE_ROLE_MATCH_STATUS),
         eq(schema.targetRoles.active, true),
-        inArray(schema.jobs.source, input.sources ?? [...ALL_SOURCES]),
+        inArray(schema.jobs.source, selectedSources),
         notExists(
           database
             .select({ id: schema.applications.id })
@@ -189,7 +200,11 @@ export async function handleRunApplyCycle(
     .orderBy(desc(schema.jobRoleMatches.score))
     .limit(maxApplicationsPerRun * 10);
 
-  const jobIds = selectJobsWithinRunLimits(eligible, maxApplicationsPerRun);
+  const jobIds = selectJobsWithinRunLimits(
+    eligible,
+    maxApplicationsPerRun,
+    selectedSources,
+  );
 
   if (!jobIds.length) {
     return {
