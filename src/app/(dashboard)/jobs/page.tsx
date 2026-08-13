@@ -15,8 +15,26 @@ import { requireDashboardUser } from "@/lib/auth";
 import { formatDate, humanize } from "@/lib/format";
 import { jobsQuerySchema } from "@/lib/validation";
 import { listJobs } from "@/services/jobs";
+import { queueApplyNow } from "../actions";
 
 type SearchParams = Promise<Record<string, string | string[] | undefined>>;
+
+/**
+ * Plain wording for the model's verdict. "uncertain" is the manual-review band, not a
+ * failure — those are exactly the jobs the user is meant to decide on themselves.
+ */
+function verdictLabel(matchStatus: string | null): string {
+  switch (matchStatus) {
+    case "match":
+      return "Good fit";
+    case "uncertain":
+      return "Your call";
+    case "reject":
+      return "Not a fit";
+    default:
+      return "Not scored";
+  }
+}
 
 export default async function JobsPage({
   searchParams,
@@ -148,11 +166,24 @@ export default async function JobsPage({
                         <span className="score-pill">{job.matchScore}</span>
                       )}
                     </td>
-                    <td className="whitespace-nowrap">
-                      {job.matchStatus ? (
-                        <span className="source-chip">{humanize(job.matchStatus)}</span>
-                      ) : (
-                        <span className="text-xs text-[var(--muted)]">Not scored yet</span>
+                    <td className="min-w-[170px]">
+                      <span className="source-chip">{verdictLabel(job.matchStatus)}</span>
+                      {job.matchReasons.length > 0 && (
+                        <details className="mt-1">
+                          <summary className="cursor-pointer text-xs text-[var(--muted)] hover:text-[var(--ink)]">
+                            Why?
+                          </summary>
+                          <ul className="mt-1 space-y-1">
+                            {job.matchReasons.map((reason, index) => (
+                              <li
+                                key={index}
+                                className="text-xs leading-5 text-[var(--muted)]"
+                              >
+                                • {reason}
+                              </li>
+                            ))}
+                          </ul>
+                        </details>
                       )}
                     </td>
                     <td className="whitespace-nowrap">
@@ -168,7 +199,13 @@ export default async function JobsPage({
                           )}
                         </div>
                       ) : (
-                        <span className="text-xs text-[var(--muted)]">Not applied</span>
+                        // The cycle only auto-applies to "match". Anything else is the
+                        // user's call, so give them the button rather than a dead end.
+                        <form action={queueApplyNow.bind(null, job.id)}>
+                          <button type="submit" className="secondary-button">
+                            Apply to this
+                          </button>
+                        </form>
                       )}
                     </td>
                     <td className="min-w-[250px]">

@@ -145,7 +145,7 @@ export const commandPayloadSchemas = {
       jobIds,
       model: z.string().trim().min(1).max(100).optional(),
       promptVersion: z.literal("job-match-prompt-v1"),
-      policyVersion: z.literal("job-match-policy-v1"),
+      policyVersion: z.literal("job-match-policy-v2"),
       targetRoleId: z.uuid(),
       resumeVersionId: z.uuid(),
     })

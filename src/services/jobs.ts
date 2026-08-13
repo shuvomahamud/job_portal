@@ -143,6 +143,7 @@ export async function listJobs(
       ...job,
       matchScore: null as number | null,
       matchStatus: null as string | null,
+      matchReasons: [] as string[],
       applicationStatus: null as string | null,
       appliedAt: null as Date | null,
     }));
@@ -155,6 +156,7 @@ export async function listJobs(
         jobId: jobRoleMatches.jobId,
         score: jobRoleMatches.score,
         status: jobRoleMatches.status,
+        reasons: jobRoleMatches.reasons,
       })
       .from(jobRoleMatches)
       .where(and(eq(jobRoleMatches.userId, userId), inArray(jobRoleMatches.jobId, ids))),
@@ -169,11 +171,18 @@ export async function listJobs(
   ]);
 
   // Keep the strongest verdict when a job matched more than one role.
-  const matchByJob = new Map<string, { score: number | null; status: string }>();
+  const matchByJob = new Map<
+    string,
+    { score: number | null; status: string; reasons: string[] }
+  >();
   for (const row of matchRows) {
     const current = matchByJob.get(row.jobId);
     if (!current || (row.score ?? -1) > (current.score ?? -1)) {
-      matchByJob.set(row.jobId, { score: row.score, status: row.status });
+      matchByJob.set(row.jobId, {
+        score: row.score,
+        status: row.status,
+        reasons: row.reasons ?? [],
+      });
     }
   }
   const applicationByJob = new Map(applicationRows.map((row) => [row.jobId, row]));
@@ -185,6 +194,7 @@ export async function listJobs(
       ...job,
       matchScore: match?.score ?? job.fitScore ?? null,
       matchStatus: match?.status ?? null,
+      matchReasons: match?.reasons ?? [],
       applicationStatus: application?.status ?? null,
       appliedAt: application?.appliedAt ?? null,
     };

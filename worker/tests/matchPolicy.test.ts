@@ -31,10 +31,18 @@ test("deterministic policy promotes only a high-confidence compatible match", ()
   assert.equal(result.score, 100);
 });
 
-test("unknown authorization is never automatically promoted", () => {
+test("a posting silent about sponsorship can still match", () => {
+  // Most postings say nothing about sponsorship, so they score "unknown". Requiring an
+  // explicit "match" made the automated apply unreachable for an H-1B candidate. Silence
+  // is not an objection; an explicit objection is handled by the conflict case below.
   const result = decideJobMatch(evidence({ authorizationFit: "unknown" }));
-  assert.equal(result.status, "needs_review");
-  assert.equal(result.recommendation, "uncertain");
+  assert.equal(result.status, "ready_to_apply");
+  assert.equal(result.recommendation, "match");
+});
+
+test("a posting that conflicts on authorization is still refused", () => {
+  const result = decideJobMatch(evidence({ authorizationFit: "conflict" }));
+  assert.notEqual(result.recommendation, "match");
 });
 
 test("supported sponsorship blocker is archived", () => {

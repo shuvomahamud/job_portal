@@ -593,13 +593,20 @@ export async function startApplyCycle(): Promise<{ ok: boolean; message: string 
   };
 }
 
-/** Applies to one specific job now. Whole-cycle runs go through startApplyCycle. */
+/**
+ * Applies to one specific job now, on the user's explicit authorization.
+ *
+ * `manual` tells the worker to skip the "match" scoring gate. The automated cycle only
+ * applies to jobs the model scored `match`; picking one off the board is the human making
+ * that judgement instead, which is the whole point of the manual-review band.
+ * Whole-cycle runs go through startApplyCycle.
+ */
 export async function queueApplyNow(jobId: string) {
   const user = await requireDashboardUser();
   await createCommand(
     {
       type: "apply_to_jobs",
-      payloadJson: { jobIds: [z.uuid().parse(jobId)] },
+      payloadJson: { jobIds: [z.uuid().parse(jobId)], manual: true },
       priority: "high",
     },
     { source: "dashboard", requestedBy: user.id },

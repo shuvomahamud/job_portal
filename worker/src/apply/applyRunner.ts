@@ -99,6 +99,8 @@ export type ApplyJobInput = {
     visaSignal?: string | null;
   };
   mode?: ApplyMode;
+  /** A human picked this job, so the "match" scoring gate does not apply. */
+  manual?: boolean;
   page: PageLike;
   browserContext: BrowserContextLike;
   /** Test hook: simulate crash after writing submitting status. */
@@ -176,7 +178,8 @@ async function claimApplication(input: {
   userId: string;
   jobId: string;
   targetRoleId: string;
-  jobRoleMatchId: string;
+  /** Null when a human applied to a job that was never scored against a role. */
+  jobRoleMatchId: string | null;
   resumeVersionId: string;
   applyUrl: string;
 }) {
@@ -326,6 +329,18 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
     return { stopReason: "needs_manual", artifacts };
   }
 
+  // The automated cycle applies only to jobs scored "match". A person choosing a job from
+  // the board has already made that call, so the scoring gate is skipped for them; the
+  // active role, its resume, the daily caps and the pause switch all still apply.
+  const matchConditions = [
+    eq(schema.jobRoleMatches.jobId, input.job.id),
+    eq(schema.jobRoleMatches.userId, input.userId),
+    eq(schema.targetRoles.active, true),
+    ...(input.manual
+      ? []
+      : [eq(schema.jobRoleMatches.status, ELIGIBLE_ROLE_MATCH_STATUS)]),
+  ];
+
   const [match] = await database
     .select({
       id: schema.jobRoleMatches.id,
@@ -335,29 +350,57 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
     })
     .from(schema.jobRoleMatches)
     .innerJoin(schema.targetRoles, eq(schema.targetRoles.id, schema.jobRoleMatches.targetRoleId))
-    .where(
-      and(
-        eq(schema.jobRoleMatches.jobId, input.job.id),
-        eq(schema.jobRoleMatches.userId, input.userId),
-        eq(schema.jobRoleMatches.status, ELIGIBLE_ROLE_MATCH_STATUS),
-        eq(schema.targetRoles.active, true),
-      ),
-    )
+    .where(and(...matchConditions))
     .orderBy(desc(schema.jobRoleMatches.score))
     .limit(1);
 
-  if (!match?.resumeVersionId) {
+  // A manually chosen job may never have been scored against a role at all. Fall back to
+  // the active role's own resume so an explicit request is not refused for lack of a row.
+  let selected: {
+    id: string | null;
+    targetRoleId: string;
+    resumeVersionId: string;
+  } | null = match?.resumeVersionId
+    ? {
+        id: match.id,
+        targetRoleId: match.targetRoleId,
+        resumeVersionId: match.resumeVersionId,
+      }
+    : null;
+
+  if (!selected && input.manual) {
+    const [role] = await database
+      .select({
+        id: schema.targetRoles.id,
+        resumeVersionId: schema.targetRoles.resumeVersionId,
+      })
+      .from(schema.targetRoles)
+      .where(
+        and(
+          eq(schema.targetRoles.userId, input.userId),
+          eq(schema.targetRoles.active, true),
+        ),
+      )
+      .limit(1);
+    if (role) {
+      selected = { id: null, targetRoleId: role.id, resumeVersionId: role.resumeVersionId };
+    }
+  }
+
+  if (!selected) {
     await upsertApplication({
       userId: input.userId,
       jobId: input.job.id,
       status: "needs_manual",
-      stopReason: "The active role has no eligible match with a resume for this job.",
+      stopReason: input.manual
+        ? "The active role has no resume to apply with."
+        : "The active role has no eligible match with a resume for this job.",
     });
     return { stopReason: "needs_manual", artifacts };
   }
 
   let resumePath: string | null = null;
-  const resumeVersionId = match.resumeVersionId;
+  const resumeVersionId = selected.resumeVersionId;
   if (resumeVersionId) {
     try {
       const material = await materializeResume(resumeVersionId);
@@ -367,8 +410,8 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
         userId: input.userId,
         jobId: input.job.id,
         status: "needs_manual",
-        targetRoleId: match?.targetRoleId,
-        jobRoleMatchId: match?.id,
+        targetRoleId: selected.targetRoleId,
+        jobRoleMatchId: selected.id,
         resumeVersionId,
         stopReason: error instanceof Error ? error.message : "Resume materialize failed",
       });
@@ -380,8 +423,8 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
     commandId: input.commandId,
     userId: input.userId,
     jobId: input.job.id,
-    targetRoleId: match.targetRoleId,
-    jobRoleMatchId: match.id,
+    targetRoleId: selected.targetRoleId,
+    jobRoleMatchId: selected.id,
     resumeVersionId,
     applyUrl: input.job.sourceUrl,
   });

@@ -47,7 +47,7 @@ test("role-scoped local matching requires an explicit role and resume", () => {
     candidateProfileId: "20000000-0000-4000-8000-000000000000",
     jobIds: ["30000000-0000-4000-8000-000000000000"],
     promptVersion: "job-match-prompt-v1" as const,
-    policyVersion: "job-match-policy-v1" as const,
+    policyVersion: "job-match-policy-v2" as const,
   };
   assert.equal(
     commandPayloadSchemas.run_local_llm_extraction.safeParse(base).success,

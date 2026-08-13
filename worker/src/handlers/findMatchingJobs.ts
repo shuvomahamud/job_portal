@@ -169,7 +169,7 @@ export async function handleFindMatchingJobs(payload: unknown, context: HandlerC
           candidateProfileId: profile.id,
           jobIds: candidateJobIds,
           promptVersion: "job-match-prompt-v1",
-          policyVersion: "job-match-policy-v1",
+          policyVersion: "job-match-policy-v2",
           targetRoleId: role.id,
           resumeVersionId: resume.id,
         },

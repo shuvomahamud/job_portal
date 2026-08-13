@@ -37,7 +37,7 @@ const payloadSchema = z
     jobIds: z.array(z.uuid()).min(1).max(100),
     model: z.string().trim().min(1).max(100).optional(),
     promptVersion: z.literal("job-match-prompt-v1"),
-    policyVersion: z.literal("job-match-policy-v1"),
+    policyVersion: z.literal("job-match-policy-v2"),
     targetRoleId: z.uuid(),
     resumeVersionId: z.uuid(),
   })
@@ -90,7 +90,7 @@ function reviewMetadata(input: {
   return {
     schemaVersion: "job-match-v1" as const,
     promptVersion: "job-match-prompt-v1" as const,
-    policyVersion: "job-match-policy-v1" as const,
+    policyVersion: "job-match-policy-v2" as const,
     provider: input.provider.providerName,
     model: input.provider.model,
     profileUpdatedAt: input.profileUpdatedAt.toISOString(),

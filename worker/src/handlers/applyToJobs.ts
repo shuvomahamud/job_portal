@@ -20,6 +20,12 @@ const payloadSchema = z
     mode: z.enum(["dry_run", "fill_only", "fill_and_submit"]).optional(),
     maxJobs: z.number().int().min(1).max(50).optional(),
     maxRuntimeMinutes: z.number().int().min(1).max(180).optional(),
+    /**
+     * Set when a human picked this job from the board. The automated cycle only applies
+     * to jobs scored "match"; a person choosing a job is the decision, so that gate is
+     * skipped. Everything else — active role, resume, daily caps, pause — still applies.
+     */
+    manual: z.boolean().optional(),
   })
   .strict();
 
@@ -129,6 +135,7 @@ export async function handleApplyToJobs(
             visaSignal: job.visaSignal,
           },
           mode,
+          manual: input.manual ?? false,
           page,
           browserContext: browserSession.context,
           deadlineAt: Math.min(

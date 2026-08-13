@@ -263,7 +263,7 @@ export async function createWorkerChildCommand(input: {
 type MatchReviewMetadata = {
   schemaVersion: "job-match-v1";
   promptVersion: "job-match-prompt-v1";
-  policyVersion: "job-match-policy-v1";
+  policyVersion: "job-match-policy-v2";
   provider: "ollama" | "openai";
   model: string;
   profileUpdatedAt: string;
@@ -285,7 +285,7 @@ export async function findReusableMatchReview(input: {
   profileFingerprint: string;
   jobFingerprint: string;
   promptVersion: "job-match-prompt-v1";
-  policyVersion: "job-match-policy-v1";
+  policyVersion: "job-match-policy-v2";
   resumeVersionId?: string | null;
 }) {
   const rows = await getWorkerDb()

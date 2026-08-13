@@ -87,7 +87,13 @@ export function decideJobMatch(evidence: JobMatchEvidence): JobMatchDecision {
 
   const canMatch =
     score >= 75 &&
-    evidence.authorizationFit === "match" &&
+    // Silence about sponsorship is the norm, not a warning sign: a posting scores
+    // authorizationFit "match" only when it explicitly permits the candidate's situation,
+    // which almost none do. Requiring that made "match" nearly unreachable for an H-1B
+    // profile, so nothing was ever auto-applied to. "conflict" is still refused, and a
+    // posting that explicitly rules the candidate out was already rejected above by
+    // hardReject and by the hard filter before it ever reached scoring.
+    evidence.authorizationFit !== "conflict" &&
     evidence.employmentFit !== "conflict" &&
     evidence.locationFit !== "conflict" &&
     evidence.roleFit !== "weak" &&
