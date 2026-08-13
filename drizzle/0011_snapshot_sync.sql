@@ -1,0 +1,16 @@
+-- Intentionally empty. This migration exists only to carry meta/0011_snapshot.json.
+--
+-- Migrations 0006-0011 were hand-written, so drizzle-kit never recorded a snapshot for
+-- them and meta/ still described the schema as of 0005. `drizzle-kit generate` therefore
+-- diffed against stale state: it could not run non-interactively, and it re-proposed
+-- creating candidate_facts and candidate_addresses, which already exist.
+--
+-- Regenerating produced exactly the DDL those hand-written migrations had already
+-- applied (verified statement by statement: two CREATE TABLE, the
+-- max_applications_per_day -> max_applications_per_run RENAME, three foreign keys and
+-- six indexes; no DROP, no data change). Running it again would fail on objects that
+-- already exist, so the body is removed and only the snapshot is kept.
+--
+-- With meta/0011_snapshot.json in place, the next `drizzle-kit generate` diffs against
+-- the real schema again. Do not add statements here; make a new migration instead.
+SELECT 1;

@@ -66,22 +66,17 @@ export async function handleVerifySubmission(
     const confirmed = await adapterFor(row.job.source).detectSuccess(page);
     await screenshot(artifacts, confirmed ? "reverify-confirmed" : "reverify-unconfirmed");
     if (confirmed) {
-      await database.batch([
-        database
-          .update(schema.applications)
-          .set({
-            status: "applied",
-            appliedAt: new Date(),
-            confirmationEvidence: { detected: true, source: "reverify" },
-            stopReason: "reverify_confirmed",
-            updatedAt: new Date(),
-          })
-          .where(eq(schema.applications.id, applicationId)),
-        database
-          .update(schema.jobs)
-          .set({ status: "applied", updatedAt: new Date() })
-          .where(eq(schema.jobs.id, row.job.id)),
-      ]);
+      // `jobs` is shared and has no user_id; the outcome belongs on the application only.
+      await database
+        .update(schema.applications)
+        .set({
+          status: "applied",
+          appliedAt: new Date(),
+          confirmationEvidence: { detected: true, source: "reverify" },
+          stopReason: "reverify_confirmed",
+          updatedAt: new Date(),
+        })
+        .where(eq(schema.applications.id, applicationId));
     } else {
       await database
         .update(schema.applications)

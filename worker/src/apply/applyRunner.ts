@@ -300,6 +300,30 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
     }
   }
 
+  // No active role means nothing gets submitted. The active role is what selects the
+  // resume, so without one there is no defensible answer to "which resume did you send".
+  // Checked explicitly rather than inferred from an empty join, so the stop reason
+  // distinguishes "no role configured" from "this job did not match".
+  const [activeRole] = await database
+    .select({ id: schema.targetRoles.id })
+    .from(schema.targetRoles)
+    .where(
+      and(
+        eq(schema.targetRoles.userId, input.userId),
+        eq(schema.targetRoles.active, true),
+      ),
+    )
+    .limit(1);
+  if (!activeRole) {
+    await upsertApplication({
+      userId: input.userId,
+      jobId: input.job.id,
+      status: "needs_manual",
+      stopReason: "No active target role, so nothing was submitted.",
+    });
+    return { stopReason: "needs_manual", artifacts };
+  }
+
   const [match] = await database
     .select({
       id: schema.jobRoleMatches.id,
@@ -325,7 +349,7 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
       userId: input.userId,
       jobId: input.job.id,
       status: "needs_manual",
-      stopReason: "No eligible role match with a resume.",
+      stopReason: "The active role has no eligible match with a resume for this job.",
     });
     return { stopReason: "needs_manual", artifacts };
   }
@@ -845,22 +869,20 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
         const success = await adapter.detectSuccess(activePage);
         await screenshot(artifactCtx, "99-after-submit");
         if (success) {
-          await database.batch([
-            database
-              .update(schema.applications)
-              .set({
-                status: "applied",
-                appliedAt: new Date(),
-                confirmationEvidence: { detected: true },
-                stopReason: "submitted",
-                updatedAt: new Date(),
-              })
-              .where(eq(schema.applications.id, application.id)),
-            database
-              .update(schema.jobs)
-              .set({ status: "applied", updatedAt: new Date() })
-              .where(eq(schema.jobs.id, input.job.id)),
-          ]);
+          // Only the application row is written. `jobs` is shared across users and has no
+          // user_id, so stamping an outcome there would tell every other user that they
+          // had applied. Per-user outcome lives in applications; job lists resolve it
+          // through that table.
+          await database
+            .update(schema.applications)
+            .set({
+              status: "applied",
+              appliedAt: new Date(),
+              confirmationEvidence: { detected: true },
+              stopReason: "submitted",
+              updatedAt: new Date(),
+            })
+            .where(eq(schema.applications.id, application.id));
           await finishTrace(artifactCtx, false);
           return { stopReason: "submitted", applicationId: application.id, artifacts: artifactCtx.paths };
         }

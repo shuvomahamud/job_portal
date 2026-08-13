@@ -253,6 +253,12 @@ export const resumeVersions = pgTable(
       table.userId,
       table.sha256,
     ),
+    // At most one default per user. Without this, two rows can both claim the default
+    // and which resume a role picks up becomes a coin flip. Writers must clear the old
+    // default before setting the new one, which setDefault already does.
+    uniqueIndex("resume_versions_one_default_per_user")
+      .on(table.userId)
+      .where(sql`${table.isDefault}`),
   ],
 );
 
@@ -366,6 +372,12 @@ export const targetRoles = pgTable(
   (table) => [
     uniqueIndex("target_roles_user_title_unique").on(table.userId, table.title),
     index("target_roles_user_active_idx").on(table.userId, table.active),
+    // Exactly one role may be active at a time. The active role decides which resume is
+    // submitted, so two active roles would make that choice ambiguous. Writers clear the
+    // previous active role before setting a new one.
+    uniqueIndex("target_roles_one_active_per_user")
+      .on(table.userId)
+      .where(sql`${table.active}`),
   ],
 );
 

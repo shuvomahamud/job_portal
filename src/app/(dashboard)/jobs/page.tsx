@@ -11,6 +11,7 @@ import {
   JOB_STATUSES,
   SELECTABLE_JOB_SOURCES,
 } from "@/lib/constants";
+import { requireDashboardUser } from "@/lib/auth";
 import { formatDate, humanize } from "@/lib/format";
 import { jobsQuerySchema } from "@/lib/validation";
 import { listJobs } from "@/services/jobs";
@@ -33,7 +34,8 @@ export default async function JobsPage({
   const query = parsed.success
     ? parsed.data
     : jobsQuerySchema.parse({ limit: 100 });
-  const jobRows = await listJobs(query);
+  const user = await requireDashboardUser();
+  const jobRows = await listJobs(query, user.id);
 
   return (
     <>

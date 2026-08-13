@@ -64,6 +64,27 @@
       "when": 1786643000000,
       "tag": "0009_candidate_addresses",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1786644000000,
+      "tag": "0010_one_default_resume",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1786645000000,
+      "tag": "0011_one_active_role",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1786638492590,
+      "tag": "0011_snapshot_sync",
+      "breakpoints": true
     }
   ]
 }

@@ -25,6 +25,7 @@ import type {
   jobsQuerySchema,
   jobUpdateSchema,
 } from "@/lib/validation";
+import { isPerUserJobStatus } from "@/lib/constants";
 
 export async function importJob(input: z.infer<typeof jobImportSchema>) {
   const db = getDb();
@@ -59,9 +60,27 @@ export async function importJob(input: z.infer<typeof jobImportSchema>) {
   return job;
 }
 
-function buildJobFilterConditions(query: z.infer<typeof jobsQuerySchema>) {
+function buildJobFilterConditions(
+  query: z.infer<typeof jobsQuerySchema>,
+  userId?: string,
+) {
   const conditions: SQL[] = [];
-  if (query.status) conditions.push(eq(jobs.status, query.status));
+  if (query.status) {
+    // An outcome status is a fact about this user's application, not about the posting,
+    // so resolve it through applications rather than the shared jobs.status column.
+    if (isPerUserJobStatus(query.status) && userId) {
+      conditions.push(
+        sql`EXISTS (
+          SELECT 1 FROM ${applications}
+          WHERE ${applications.jobId} = ${jobs.id}
+            AND ${applications.userId} = ${userId}
+            AND ${applications.status} = ${query.status}
+        )`,
+      );
+    } else {
+      conditions.push(eq(jobs.status, query.status));
+    }
+  }
   if (query.source) conditions.push(eq(jobs.source, query.source));
   if (query.company) conditions.push(ilike(jobs.company, `%${query.company}%`));
   if (query.minScore !== undefined) {
@@ -81,8 +100,11 @@ function buildJobFilterConditions(query: z.infer<typeof jobsQuerySchema>) {
   return conditions;
 }
 
-export async function listJobs(query: z.infer<typeof jobsQuerySchema>) {
-  const conditions = buildJobFilterConditions(query);
+export async function listJobs(
+  query: z.infer<typeof jobsQuerySchema>,
+  userId?: string,
+) {
+  const conditions = buildJobFilterConditions(query, userId);
 
   return getDb()
     .select()
@@ -103,8 +125,9 @@ export async function deleteJob(id: string) {
 
 export async function deleteJobsMatching(
   query: z.infer<typeof jobsQuerySchema>,
+  userId?: string,
 ) {
-  const conditions = buildJobFilterConditions(query);
+  const conditions = buildJobFilterConditions(query, userId);
   if (!conditions.length) {
     throw new Error("Refusing to delete jobs without filter conditions.");
   }

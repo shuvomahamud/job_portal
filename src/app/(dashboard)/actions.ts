@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, ne, sql } from "drizzle-orm";
 import { z } from "zod";
 import { getDb } from "@/db";
 import {
@@ -409,6 +409,8 @@ export async function createTargetRole(formData: FormData) {
     throw new Error("Cannot activate a role whose resume text is unhealthy. Re-extract or upload a clearer PDF/DOCX.");
   }
 
+  // Deactivate first: the new row does not exist yet, so there is nothing to keep.
+  if (input.active) await deactivateOtherRoles(user.id);
   await getDb().insert(targetRoles).values({
     userId: user.id,
     title: input.title,
@@ -419,6 +421,25 @@ export async function createTargetRole(formData: FormData) {
     active: input.active,
   });
   revalidatePath("/roles");
+}
+
+/**
+ * Clears the user's other active roles so exactly one stays active.
+ * Must run before activating a role: target_roles_one_active_per_user rejects a second
+ * active row, and it is the database, not this function, that is the real guarantee.
+ */
+async function deactivateOtherRoles(userId: string, keepRoleId?: string) {
+  const where = keepRoleId
+    ? and(
+        eq(targetRoles.userId, userId),
+        eq(targetRoles.active, true),
+        ne(targetRoles.id, keepRoleId),
+      )
+    : and(eq(targetRoles.userId, userId), eq(targetRoles.active, true));
+  await getDb()
+    .update(targetRoles)
+    .set({ active: false, updatedAt: new Date() })
+    .where(where);
 }
 
 export async function updateTargetRole(formData: FormData) {
@@ -450,6 +471,7 @@ export async function updateTargetRole(formData: FormData) {
     throw new Error("Cannot activate a role whose resume text is unhealthy. Re-extract or upload a clearer PDF/DOCX.");
   }
 
+  if (input.active) await deactivateOtherRoles(user.id, id);
   await getDb()
     .update(targetRoles)
     .set({
@@ -479,6 +501,8 @@ export async function setTargetRoleActive(roleId: string, active: boolean) {
     if (!resume || !isResumeHealthyForActivation(resume)) {
       throw new Error("Cannot activate a role whose resume text is unhealthy.");
     }
+    // Activating a role retires whichever role was active before it.
+    await deactivateOtherRoles(user.id, id);
   }
   await getDb()
     .update(targetRoles)

@@ -10,6 +10,24 @@ export const JOB_STATUSES = [
   "archived",
 ] as const;
 
+/**
+ * Job statuses that describe one candidate's outcome rather than the posting itself.
+ * `jobs` is shared across users and carries no user_id, so these are never stored there;
+ * filtering by one resolves through the current user's `applications` row instead.
+ */
+export const PER_USER_JOB_STATUSES = [
+  "applied",
+  "interview",
+  "offer",
+  "rejected",
+] as const;
+
+export function isPerUserJobStatus(
+  status: string,
+): status is (typeof PER_USER_JOB_STATUSES)[number] {
+  return (PER_USER_JOB_STATUSES as readonly string[]).includes(status);
+}
+
 export const APPLICATION_STATUSES = [
   "draft",
   "ready",

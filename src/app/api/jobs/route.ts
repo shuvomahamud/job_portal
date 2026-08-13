@@ -5,16 +5,16 @@ import { deleteJobsMatching, listJobs } from "@/services/jobs";
 
 export async function GET(request: Request) {
   return handleApi(async () => {
-    await requireDashboardUser();
+    const user = await requireDashboardUser();
     const url = new URL(request.url);
     const query = jobsQuerySchema.parse(Object.fromEntries(url.searchParams));
-    return jsonOk(await listJobs(query));
+    return jsonOk(await listJobs(query, user.id));
   });
 }
 
 export async function DELETE(request: Request) {
   return handleApi(async () => {
-    await requireDashboardUser();
+    const user = await requireDashboardUser();
     const url = new URL(request.url);
     const query = jobsQuerySchema.parse(Object.fromEntries(url.searchParams));
     const hasExplicitFilter = Boolean(
@@ -31,7 +31,7 @@ export async function DELETE(request: Request) {
         "Add at least one filter before deleting jobs in bulk.",
       );
     }
-    const deleted = await deleteJobsMatching(query);
+    const deleted = await deleteJobsMatching(query, user.id);
     return jsonOk({
       deletedCount: deleted.length,
       ids: deleted.map((job) => job.id),
