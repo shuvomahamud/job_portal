@@ -4,7 +4,6 @@ import { NextResponse } from "next/server";
 const isDashboardRoute = createRouteMatcher([
   "/",
   "/jobs(.*)",
-  "/import(.*)",
   "/profile(.*)",
   "/roles(.*)",
   "/questions(.*)",

@@ -294,36 +294,6 @@ export async function deleteCandidateFact(formData: FormData) {
   revalidatePath("/profile");
 }
 
-export async function queueJobReview(jobId: string) {
-  const user = await requireDashboardUser();
-  const id = z.uuid().parse(jobId);
-  await createCommand(
-    {
-      type: "review_job",
-      payloadJson: { jobId: id, reviewerType: "codex" },
-      priority: "high",
-    },
-    { source: "dashboard", requestedBy: user.id },
-  );
-  revalidatePath(`/jobs/${id}`);
-  revalidatePath("/commands");
-}
-
-export async function queueJobReprocess(jobId: string) {
-  const user = await requireDashboardUser();
-  const id = z.uuid().parse(jobId);
-  await createCommand(
-    {
-      type: "reprocess_job",
-      payloadJson: { jobId: id, stages: ["normalize", "extract", "filter"] },
-      priority: "normal",
-    },
-    { source: "dashboard", requestedBy: user.id },
-  );
-  revalidatePath(`/jobs/${id}`);
-  revalidatePath("/commands");
-}
-
 export async function retryCommand(commandId: string) {
   const user = await requireDashboardUser();
   const id = z.uuid().parse(commandId);

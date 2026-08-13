@@ -1,5 +1,4 @@
 import Link from "next/link";
-import { eq } from "drizzle-orm";
 import {
   ArrowRight,
   BriefcaseBusiness,
@@ -11,10 +10,7 @@ import {
   Sparkles,
 } from "lucide-react";
 import { MetricCard, SectionHeading, StatusBadge } from "@/components/ui";
-import { FindMatchingJobsForm } from "@/components/find-matching-jobs-form";
 import { MatchingRunStatus } from "@/components/matching-run-status";
-import { getDb } from "@/db";
-import { candidateProfiles, targetRoles } from "@/db/schema";
 import { requireDashboardUser } from "@/lib/auth";
 import { formatDate, humanize } from "@/lib/format";
 import { jobsQuerySchema } from "@/lib/validation";
@@ -24,24 +20,13 @@ import { listJobs } from "@/services/jobs";
 
 export default async function DashboardPage() {
   const user = await requireDashboardUser();
-  const [summary, recentJobs, recentCommands, profiles, roles, latestRuns] = await Promise.all([
+  const [summary, recentJobs, recentCommands, latestRuns] = await Promise.all([
     getDashboardSummary(user.id),
-    listJobs(jobsQuerySchema.parse({ limit: 5 })),
+    listJobs(jobsQuerySchema.parse({ limit: 5 }), user.id),
     listCommands({ limit: 4, requestedBy: user.id }),
-    getDb().select().from(candidateProfiles).where(eq(candidateProfiles.userId, user.id)).limit(1),
-    getDb().select().from(targetRoles).where(eq(targetRoles.userId, user.id)),
+    // Discovery runs only as part of an apply cycle now; this is progress, not a trigger.
     listCommands({ type: "find_matching_jobs", requestedBy: user.id, limit: 1 }),
   ]);
-  const profile = profiles[0];
-  const activeRoleTitles = roles.filter((role) => role.active).map((role) => role.title);
-  const profileReady = Boolean(
-    activeRoleTitles.length &&
-      (profile?.targetLocations.length || roles.some((role) => role.locations.length)) &&
-      profile?.workAuthorizationAnswer?.trim() &&
-      profile.sponsorshipAnswer?.trim() &&
-      profile.summary?.trim() &&
-      (profile.skills.length || profile.summary.trim().length >= 100),
-  );
 
   const metrics = [
     {
@@ -134,18 +119,8 @@ export default async function DashboardPage() {
         </section>
       ) : null}
 
-      <FindMatchingJobsForm
-        defaults={{
-          targetTitles: activeRoleTitles.length
-            ? activeRoleTitles
-            : profile?.targetTitles ?? [],
-          targetLocations:
-            roles.find((role) => role.active)?.locations ??
-            profile?.targetLocations ??
-            [],
-          profileReady,
-        }}
-      />
+      {/* Discovery has no button of its own: the apply cycle on /applications spawns it.
+          This only reports progress of the discovery inside the current cycle. */}
       {latestRuns[0] && <MatchingRunStatus rootCommandId={latestRuns[0].id} />}
 
       <div className="mt-10 grid gap-6 xl:grid-cols-[1.55fr_.85fr]">
