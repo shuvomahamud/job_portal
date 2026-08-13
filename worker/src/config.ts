@@ -26,6 +26,10 @@ const envSchema = z.object({
   WORKER_MAX_CONCURRENCY: intFromEnv(1, 1, 3),
   WORKER_COMMAND_TYPES: z.string().default("find_matching_jobs,run_job_search,import_jobs,run_rule_filter"),
   WORKER_IDLE_BACKOFF_MAX_SECONDS: intFromEnv(60, 10, 600),
+  // Every dashboard call is on the critical path of the poll loop, so one that never
+  // answers stops the worker completely. These endpoints do a little Postgres work and
+  // return; 30s is generous for that and still short enough to notice.
+  WORKER_DASHBOARD_TIMEOUT_MS: intFromEnv(30000, 1000, 120000),
   WORKER_HEARTBEAT_INTERVAL_SECONDS: intFromEnv(120, 30, 600),
   JOB_SEARCH_MAX_RESULTS_PER_COMMAND: intFromEnv(50, 1, 200),
   JOB_SOURCE_DELAY_MS: intFromEnv(3000, 0, 60000),

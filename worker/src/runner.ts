@@ -78,6 +78,7 @@ export async function runWorkerLoop() {
 
   let idlePolls = 0;
   let nextRecoveryAt = 0;
+  let consecutiveClaimFailures = 0;
 
   while (!stopping) {
     const now = Date.now();
@@ -92,11 +93,38 @@ export async function runWorkerLoop() {
     }
 
     let claimed = 0;
+    let claimFailed = false;
     for (let i = 0; i < cfg.WORKER_CLAIM_LIMIT && !stopping; i += 1) {
-      const command = await claimCommand(commandTypes);
+      let command: DashboardCommand | null;
+      try {
+        command = await claimCommand(commandTypes);
+      } catch (error) {
+        // A dashboard that is down, slow, or throwing must not take the worker with it.
+        // Letting this escape ends the loop, the process exits, and nothing runs again
+        // until someone notices and restarts it by hand.
+        claimFailed = true;
+        consecutiveClaimFailures += 1;
+        logger.error("Could not claim a command from the dashboard", {
+          error: error instanceof Error ? error.message : "Unknown claim error",
+          consecutiveFailures: consecutiveClaimFailures,
+        });
+        break;
+      }
+      consecutiveClaimFailures = 0;
       if (!command) break;
       claimed += 1;
       await processCommand(command);
+    }
+
+    if (claimFailed) {
+      // Back off further the longer the dashboard stays unreachable, so a sustained
+      // outage is not hammered every ten seconds.
+      const backoffSeconds = Math.min(
+        cfg.WORKER_POLL_INTERVAL_SECONDS * consecutiveClaimFailures,
+        cfg.WORKER_IDLE_BACKOFF_MAX_SECONDS,
+      );
+      await sleep(backoffSeconds * 1000);
+      continue;
     }
 
     if (claimed === 0) {

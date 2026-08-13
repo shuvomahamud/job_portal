@@ -34,16 +34,44 @@ function normalizeCommand(command: RawDashboardCommand | null | undefined): Dash
   };
 }
 
+/**
+ * Thrown when the dashboard accepted a request but never answered.
+ *
+ * Worth separating from an ordinary failure: a claim that times out this way has very
+ * likely already been recorded server-side, so the command is sitting in `claimed` with
+ * nobody running it. Stale-claim recovery releases it, but only if this worker keeps
+ * looping rather than dying on the error.
+ */
+export class DashboardTimeoutError extends Error {
+  constructor(path: string, timeoutMs: number) {
+    super(`Dashboard did not respond to ${path} within ${timeoutMs}ms.`);
+    this.name = "DashboardTimeoutError";
+  }
+}
+
 async function dashboardRequest<T>(path: string, body: Record<string, unknown>): Promise<T> {
   const cfg = getConfig();
-  const response = await fetch(`${cfg.DASHBOARD_BASE_URL}${path}`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${cfg.WORKER_API_SECRET}`,
-    },
-    body: JSON.stringify(body),
-  });
+  const timeoutMs = cfg.WORKER_DASHBOARD_TIMEOUT_MS;
+  let response: Response;
+  try {
+    response = await fetch(`${cfg.DASHBOARD_BASE_URL}${path}`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${cfg.WORKER_API_SECRET}`,
+      },
+      body: JSON.stringify(body),
+      // Without this the worker blocks forever on a request the dashboard never finishes,
+      // which wedges the whole poll loop — including the stale-claim sweep that would
+      // otherwise clean up after it.
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+  } catch (error) {
+    if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) {
+      throw new DashboardTimeoutError(path, timeoutMs);
+    }
+    throw error;
+  }
   const json = apiEnvelopeSchema.parse(await response.json().catch(() => ({})));
   if (!response.ok) {
     const err = json.error as { code?: string; message?: string } | undefined;
