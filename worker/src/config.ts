@@ -1,8 +1,14 @@
 import { config as loadEnv } from "dotenv";
 import { z } from "zod";
 
-loadEnv({ path: process.env.WORKER_ENV_FILE || ".env.local", quiet: true });
-loadEnv({ path: process.env.WORKER_ENV_FILE || ".env", quiet: true });
+if (process.env.WORKER_ENV_FILE) {
+  loadEnv({ path: process.env.WORKER_ENV_FILE, quiet: true });
+}
+// Keep the repository env files as fallbacks for settings intentionally omitted from
+// the Mac app's worker.env (notably DATABASE_URL and WORKER_API_SECRET). dotenv does
+// not overwrite values loaded above, so worker-specific settings still win.
+loadEnv({ path: ".env.local", quiet: true });
+loadEnv({ path: ".env", quiet: true });
 
 const intFromEnv = (defaultValue: number, min: number, max: number) =>
   z.coerce.number().int().min(min).max(max).default(defaultValue);
