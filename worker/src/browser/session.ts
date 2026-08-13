@@ -3,6 +3,8 @@ import { logger } from "../logger";
 import { prepareManagedCdpBrowser, type CdpCleanupResult } from "../search/cdpBrowser";
 import type { BrowserContextLike, BrowserLike, PlaywrightModule } from "./playwrightTypes";
 
+let sharedCdpConnection: { endpoint: string; browser: BrowserLike } | null = null;
+
 export type BrowserSession = {
   context: BrowserContextLike;
   /** Non-null only when JOB_BROWSER_CDP_MANAGE_PAGES closed stale tabs before connecting. */
@@ -80,32 +82,33 @@ export async function openBrowserSession(
           });
         }
 
-        // slowMo belongs on the connect call. Passing it only through newContext is a
-        // no-op on the CDP path, and when an existing context is reused the options
-        // object is dropped entirely.
-        const connectedBrowser = await playwright.chromium.connectOverCDP(cfg.JOB_BROWSER_CDP_URL, {
-          timeout: cfg.JOB_BROWSER_CDP_CONNECT_TIMEOUT_MS,
-          slowMo: cfg.JOB_BROWSER_SLOW_MO_MS,
-        });
+        // Playwright has no public CDP `disconnect()` API. Calling Browser.close() after
+        // each command closes Chrome's pages asynchronously and can kill the next command's
+        // page after it has already begun. Keep one connection for this worker process and
+        // let managed-page cleanup reset tabs between commands instead.
+        let connectedBrowser =
+          sharedCdpConnection?.endpoint === cfg.JOB_BROWSER_CDP_URL &&
+          (sharedCdpConnection.browser.isConnected?.() ?? true)
+            ? sharedCdpConnection.browser
+            : null;
+        if (!connectedBrowser) {
+          connectedBrowser = await playwright.chromium.connectOverCDP(cfg.JOB_BROWSER_CDP_URL, {
+            timeout: cfg.JOB_BROWSER_CDP_CONNECT_TIMEOUT_MS,
+            slowMo: cfg.JOB_BROWSER_SLOW_MO_MS,
+          });
+          sharedCdpConnection = { endpoint: cfg.JOB_BROWSER_CDP_URL, browser: connectedBrowser };
+        }
         browser = connectedBrowser;
         const context = connectedBrowser.contexts()[0] ?? (await connectedBrowser.newContext(contextOptions));
         return {
           context,
           cdpCleanup: cdpCleanup ? { closedPageCount: cdpCleanup.closedTargetIds.length } : null,
-          close: async () => {
-            if (connectedBrowser.disconnect) await connectedBrowser.disconnect();
-            else await connectedBrowser.close();
-          },
+          close: async () => undefined,
         };
       } catch (error) {
         lastError = error;
-        if (browser) {
-          try {
-            if (browser.disconnect) await browser.disconnect();
-            else await browser.close();
-          } catch {
-            // The connection already failed; the retry below performs a fresh cleanup.
-          }
+        if (browser && sharedCdpConnection?.browser === browser) {
+          sharedCdpConnection = null;
         }
         logger.warn("Could not connect to Chrome CDP browser", {
           attempt,
@@ -126,4 +129,9 @@ export async function openBrowserSession(
     launchOptions,
   );
   return { context, cdpCleanup: null, close: () => context.close() };
+}
+
+/** Test-only: isolate process-lifetime CDP connection tests. */
+export function resetCdpConnectionForTests() {
+  sharedCdpConnection = null;
 }

@@ -75,7 +75,7 @@ export type BrowserContextLike = {
 export type BrowserLike = {
   contexts(): BrowserContextLike[];
   newContext(options: Record<string, unknown>): Promise<BrowserContextLike>;
-  disconnect?: () => Promise<void> | void;
+  isConnected?(): boolean;
   close(): Promise<void>;
 };
 
