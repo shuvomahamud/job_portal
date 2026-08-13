@@ -75,6 +75,7 @@ export const commandTypeEnum = pgEnum("command_type", [
   "apply_to_jobs",
   "verify_submission",
   "sync_resume_text",
+  "open_browser_login",
 ]);
 
 export const commandSourceEnum = pgEnum("command_source", [
@@ -736,6 +737,40 @@ export const commandEvents = pgTable(
   (table) => [index("command_events_command_idx").on(table.commandId)],
 );
 
+/** Human intervention requested by a worker after a job site blocks automation. */
+export const automationAlerts = pgTable(
+  "automation_alerts",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    commandId: uuid("command_id").references(() => commands.id, {
+      onDelete: "set null",
+    }),
+    kind: text("kind").notNull(),
+    site: text("site").notNull(),
+    status: text("status").default("open").notNull(),
+    message: text("message").notNull(),
+    pageUrl: text("page_url"),
+    metadataJson: jsonb("metadata_json")
+      .$type<Record<string, unknown>>()
+      .default({})
+      .notNull(),
+    resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index("automation_alerts_user_status_idx").on(table.userId, table.status),
+    index("automation_alerts_command_idx").on(table.commandId),
+  ],
+);
+
 export const integrationEvents = pgTable(
   "integration_events",
   {
@@ -890,3 +925,4 @@ export type TargetRole = typeof targetRoles.$inferSelect;
 export type JobRoleMatch = typeof jobRoleMatches.$inferSelect;
 export type ApplicationAnswer = typeof applicationAnswers.$inferSelect;
 export type PendingQuestion = typeof pendingQuestions.$inferSelect;
+export type AutomationAlert = typeof automationAlerts.$inferSelect;

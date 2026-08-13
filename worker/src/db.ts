@@ -72,8 +72,96 @@ export async function getExistingUrls(urls: string[]) {
   return new Set(rows.map((row) => row.sourceUrl));
 }
 
+export async function getJobsBySourceUrls(urls: string[]) {
+  if (!urls.length) return [];
+  return getWorkerDb()
+    .select({ id: schema.jobs.id, sourceUrl: schema.jobs.sourceUrl })
+    .from(schema.jobs)
+    .where(inArray(schema.jobs.sourceUrl, urls));
+}
+
 export async function addCommandEvent(commandId: string, eventType: string, message: string, metadataJson?: Record<string, unknown>) {
   await getWorkerDb().insert(schema.commandEvents).values({ commandId, eventType, message, metadataJson });
+}
+
+export async function upsertAutomationAlert(input: {
+  userId: string;
+  commandId: string;
+  kind: string;
+  site: string;
+  message: string;
+  pageUrl?: string | null;
+  metadataJson?: Record<string, unknown>;
+}) {
+  const database = getWorkerDb();
+  const [existing] = await database
+    .select({ id: schema.automationAlerts.id })
+    .from(schema.automationAlerts)
+    .where(
+      and(
+        eq(schema.automationAlerts.userId, input.userId),
+        eq(schema.automationAlerts.site, input.site),
+        eq(schema.automationAlerts.kind, input.kind),
+        eq(schema.automationAlerts.status, "open"),
+      ),
+    )
+    .limit(1);
+  if (existing) {
+    const [alert] = await database
+      .update(schema.automationAlerts)
+      .set({
+        commandId: input.commandId,
+        message: input.message,
+        pageUrl: input.pageUrl ?? null,
+        metadataJson: input.metadataJson ?? {},
+        updatedAt: new Date(),
+      })
+      .where(eq(schema.automationAlerts.id, existing.id))
+      .returning();
+    return alert!;
+  }
+  const [alert] = await database
+    .insert(schema.automationAlerts)
+    .values({
+      userId: input.userId,
+      commandId: input.commandId,
+      kind: input.kind,
+      site: input.site,
+      message: input.message,
+      pageUrl: input.pageUrl ?? null,
+      metadataJson: input.metadataJson ?? {},
+    })
+    .returning();
+  return alert!;
+}
+
+export async function getAutomationAlertForUser(alertId: string, userId: string) {
+  const [alert] = await getWorkerDb()
+    .select()
+    .from(schema.automationAlerts)
+    .where(
+      and(
+        eq(schema.automationAlerts.id, alertId),
+        eq(schema.automationAlerts.userId, userId),
+      ),
+    )
+    .limit(1);
+  return alert ?? null;
+}
+
+export async function resolveAutomationAlerts(userId: string, sites: string[]) {
+  if (!sites.length) return [];
+  return getWorkerDb()
+    .update(schema.automationAlerts)
+    .set({ status: "resolved", resolvedAt: new Date(), updatedAt: new Date() })
+    .where(
+      and(
+        eq(schema.automationAlerts.userId, userId),
+        eq(schema.automationAlerts.status, "open"),
+        inArray(schema.automationAlerts.site, sites),
+      ),
+    )
+    .returning({ id: schema.automationAlerts.id });
 }
 
 export async function getCommandStatus(commandId: string) {

@@ -231,6 +231,7 @@ let allCommandTypes = [
     "run_apply_cycle",
     "apply_to_jobs",
     "verify_submission",
+    "open_browser_login",
 ]
 
 let commandTypeLabels: [String: String] = [
@@ -244,6 +245,7 @@ let commandTypeLabels: [String: String] = [
     "run_apply_cycle": "Run the apply cycle",
     "apply_to_jobs": "Fill in applications",
     "verify_submission": "Verify submissions",
+    "open_browser_login": "Open browser for login/CAPTCHA",
 ]
 
 // MARK: - Configuration store
@@ -282,6 +284,13 @@ final class ConfigStore {
             values[Key.applyMaxPerRun] = legacyLimit
         }
         if values.isEmpty { values = Self.defaults() }
+        if let configured = values[Key.commandTypes] {
+            var commands = configured.split(separator: ",").map(String.init)
+            if !commands.contains("open_browser_login") {
+                commands.append("open_browser_login")
+                values[Key.commandTypes] = commands.joined(separator: ",")
+            }
+        }
 
         let envLocal = URL(fileURLWithPath: repoDir).appendingPathComponent(".env.local")
         if let contents = try? String(contentsOf: envLocal, encoding: .utf8) {
@@ -1616,6 +1625,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // The window is the whole point of the app, so show it on launch.
         openMain()
+        if ProcessInfo.processInfo.arguments.contains("--start") {
+            worker.start()
+        }
     }
 
     /// Closing the window must not stop the agent; the menu bar item stays in charge.

@@ -283,7 +283,7 @@ test("any failure after the submitting write remains submission_unknown", () => 
   assert.equal(statusAfterApplyFailure(false), "needs_manual");
 });
 
-test("run selection stops at the global limit and honors per-role limits", () => {
+test("run selection stops at the limit chosen for this run", () => {
   assert.equal(ELIGIBLE_ROLE_MATCH_STATUS, "match");
   const candidates = [
     { jobId: "job-1", targetRoleId: "role-a", roleRunLimit: 1 },
@@ -291,7 +291,7 @@ test("run selection stops at the global limit and honors per-role limits", () =>
     { jobId: "job-3", targetRoleId: "role-b", roleRunLimit: null },
     { jobId: "job-4", targetRoleId: "role-b", roleRunLimit: null },
   ];
-  assert.deepEqual(selectJobsWithinRunLimits(candidates, 2), ["job-1", "job-3"]);
+  assert.deepEqual(selectJobsWithinRunLimits(candidates, 2), ["job-1", "job-2"]);
 });
 
 test("a new run starts with a fresh allowance", () => {
@@ -299,6 +299,6 @@ test("a new run starts with a fresh allowance", () => {
     { jobId: "job-1", targetRoleId: "role-a", roleRunLimit: 1 },
     { jobId: "job-2", targetRoleId: "role-a", roleRunLimit: 1 },
   ];
-  assert.deepEqual(selectJobsWithinRunLimits(candidates, 5), ["job-1"]);
-  assert.deepEqual(selectJobsWithinRunLimits(candidates, 5), ["job-1"]);
+  assert.deepEqual(selectJobsWithinRunLimits(candidates, 5), ["job-1", "job-2"]);
+  assert.deepEqual(selectJobsWithinRunLimits(candidates, 5), ["job-1", "job-2"]);
 });

@@ -7,7 +7,8 @@
  * command with "Too big: expected number to be <=50", so a discovery run silently found
  * nothing at all. Both handlers now validate against this constant.
  */
-export const MAX_DISCOVERY_RESULTS_PER_COMMAND = 100;
+export { MAX_DISCOVERY_RESULTS_PER_COMMAND } from "../../../src/lib/runLimits";
+import { MAX_DISCOVERY_RESULTS_PER_COMMAND } from "../../../src/lib/runLimits";
 
 /** Never search for fewer than this, however small the apply target is. */
 const MIN_DISCOVERY_RESULTS = 10;

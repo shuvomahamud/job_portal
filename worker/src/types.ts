@@ -17,7 +17,8 @@ export type CommandType =
   | "run_apply_cycle"
   | "apply_to_jobs"
   | "verify_submission"
-  | "sync_resume_text";
+  | "sync_resume_text"
+  | "open_browser_login";
 
 export type WorkerSpawnableCommandType =
   | "run_local_llm_extraction"

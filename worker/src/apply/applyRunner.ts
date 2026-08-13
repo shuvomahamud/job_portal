@@ -18,6 +18,8 @@ import {
 import { optionMatches } from "../formfill/optionMatching";
 import type { DetectedField, MatchSettings } from "../formfill/types";
 import { logger } from "../logger";
+import { detectBrowserBlocker, siteFromUrl } from "../browser/blockerDetection";
+import { reportBrowserBlocker } from "../browser/reportBlocker";
 import { resolveNotifyChannel, type PendingQuestionSummary } from "../notify";
 import { humanDelayMs } from "../search/browserDiscovery";
 import { materializeResume } from "../resume/materialize";
@@ -474,13 +476,29 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
     await sleep(fixture ? 20 : readingDelayMs(bodyText.split(/\s+/).filter(Boolean).length, random));
     await screenshot(artifactCtx, "00-jobpage");
 
-    const blocked = await adapter.detectBlocked(input.page);
-    if (blocked.blocked) {
+    const detectedBlocker = fixture
+      ? null
+      : await detectBrowserBlocker(input.page, siteFromUrl(input.page.url()));
+    const legacyBlocked = detectedBlocker ? null : await adapter.detectBlocked(input.page);
+    if (detectedBlocker || legacyBlocked?.blocked) {
+      const blocker = detectedBlocker ?? {
+        kind: "captcha" as const,
+        site: siteFromUrl(input.page.url()),
+        pageUrl: input.page.url(),
+        message: legacyBlocked!.reason,
+        evidence: legacyBlocked!.reason,
+      };
+      await reportBrowserBlocker({
+        commandId: input.commandId,
+        userId: input.userId,
+        blocker,
+        cfg,
+      });
       await upsertApplication({
         userId: input.userId,
         jobId: input.job.id,
         status: "blocked",
-        stopReason: blocked.reason,
+        stopReason: blocker.message,
         applyUrl: input.page.url(),
       });
       await screenshot(artifactCtx, "blocked");
@@ -635,13 +653,29 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
         return { stopReason: "canceled", applicationId: application.id, artifacts: artifactCtx.paths };
       }
 
-      const pageBlocked = await adapter.detectBlocked(activePage);
-      if (pageBlocked.blocked) {
+      const detectedStepBlocker = fixture
+        ? null
+        : await detectBrowserBlocker(activePage, siteFromUrl(activePage.url()));
+      const legacyStepBlocked = detectedStepBlocker ? null : await adapter.detectBlocked(activePage);
+      if (detectedStepBlocker || legacyStepBlocked?.blocked) {
+        const blocker = detectedStepBlocker ?? {
+          kind: "captcha" as const,
+          site: siteFromUrl(activePage.url()),
+          pageUrl: activePage.url(),
+          message: legacyStepBlocked!.reason,
+          evidence: legacyStepBlocked!.reason,
+        };
+        await reportBrowserBlocker({
+          commandId: input.commandId,
+          userId: input.userId,
+          blocker,
+          cfg,
+        });
         await upsertApplication({
           userId: input.userId,
           jobId: input.job.id,
           status: "blocked",
-          stopReason: pageBlocked.reason,
+          stopReason: blocker.message,
           applyUrl: activePage.url(),
         });
         await screenshot(artifactCtx, `blocked-step-${step}`);

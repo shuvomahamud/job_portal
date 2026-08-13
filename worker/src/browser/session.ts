@@ -45,9 +45,10 @@ export async function loadPlaywright(): Promise<PlaywrightModule> {
 export async function openBrowserSession(
   playwright: PlaywrightModule,
   cfg: WorkerConfig,
+  options?: { headless?: boolean },
 ): Promise<BrowserSession> {
   const contextOptions = {
-    headless: cfg.JOB_BROWSER_HEADLESS,
+    headless: options?.headless ?? cfg.JOB_BROWSER_HEADLESS,
     slowMo: cfg.JOB_BROWSER_SLOW_MO_MS,
     viewport: { width: 1365, height: 900 },
     locale: "en-US",

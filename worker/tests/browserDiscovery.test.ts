@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   buildBrowserSearchUrl,
+  buildBrowserSearchPageUrl,
   buildDiscoveredJobRecords,
   extractJobUrlsFromHtml,
   humanDelayMs,
@@ -16,6 +17,17 @@ test("buildBrowserSearchUrl creates source-specific search pages", () => {
   assert.equal(
     buildBrowserSearchUrl({ source: "dice", query: "Oracle SQL" }),
     "https://www.dice.com/jobs?q=Oracle%20SQL",
+  );
+});
+
+test("buildBrowserSearchPageUrl uses each board's real pagination parameter", () => {
+  assert.equal(
+    buildBrowserSearchPageUrl({ source: "indeed", query: ".NET", location: "New York" }, 3),
+    "https://www.indeed.com/jobs?q=.NET&l=New+York&start=20",
+  );
+  assert.equal(
+    buildBrowserSearchPageUrl({ source: "dice", query: ".NET" }, 2),
+    "https://www.dice.com/jobs?q=.NET&page=2",
   );
 });
 

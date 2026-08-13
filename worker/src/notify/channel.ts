@@ -28,12 +28,19 @@ export type NotifyRunSummaryInput = {
   failed: number;
 };
 
+export type NotifyBrowserBlockedInput = {
+  site: string;
+  kind: "captcha" | "login_required" | "access_denied";
+  message: string;
+};
+
 export type NotificationChannel = {
   name: "desktop" | "dashboard";
   /** Returns a channel message id keyed by question shortId, when the channel has one. */
   notifyQuestions(input: NotifyQuestionsInput): Promise<{ messageIds?: Record<string, string> }>;
   notifyAnswerAccepted(input: NotifyAnswerAcceptedInput): Promise<void>;
   notifyRunSummary(input: NotifyRunSummaryInput): Promise<void>;
+  notifyBrowserBlocked(input: NotifyBrowserBlockedInput): Promise<void>;
 };
 
 /** Body text for a batched question notification. Shared so channels read alike. */
@@ -43,6 +50,12 @@ export function formatQuestionsBody(input: NotifyQuestionsInput): string {
     (question) => `• ${question.questionText}${question.required ? " (required)" : ""}`,
   );
   return [where, ...lines].filter(Boolean).join("\n");
+}
+
+export function formatBrowserBlockedTitle(kind: NotifyBrowserBlockedInput["kind"]): string {
+  if (kind === "captcha") return "CAPTCHA needs your attention";
+  if (kind === "login_required") return "Job-site login required";
+  return "Job site blocked the worker";
 }
 
 export function formatQuestionsTitle(input: NotifyQuestionsInput): string {

@@ -29,12 +29,13 @@ import {
 import { requireCommandUserId } from "../requireCommandUserId";
 import { isResumeHealthyForActivation } from "../../../src/lib/resumeHealth";
 import type { HandlerContext, HandlerResult } from "../types";
+import { MAX_DISCOVERY_RESULTS_PER_COMMAND } from "../../../src/lib/runLimits";
 
 const payloadSchema = z
   .object({
     parentCommandId: z.uuid(),
     candidateProfileId: z.uuid(),
-    jobIds: z.array(z.uuid()).min(1).max(100),
+    jobIds: z.array(z.uuid()).min(1).max(MAX_DISCOVERY_RESULTS_PER_COMMAND),
     model: z.string().trim().min(1).max(100).optional(),
     promptVersion: z.literal("job-match-prompt-v1"),
     policyVersion: z.literal("job-match-policy-v2"),
@@ -117,6 +118,35 @@ function cachedEvidence(review: { rawOutput: Record<string, unknown> | null }) {
 
 function roleMatchStatus(decision: JobMatchDecision): "match" | "uncertain" | "reject" {
   return decision.recommendation;
+}
+
+function applyAuthorizedContractPolicy(
+  evidence: JobMatchEvidence,
+  candidate: {
+    sponsorshipAnswer: string;
+    matchingInstructions: string | null;
+    preferredEmploymentTypes: string[];
+  },
+  job: { title: string; employmentType: string | null; description: string },
+): JobMatchEvidence {
+  const candidateText = `${candidate.sponsorshipAnswer} ${candidate.matchingInstructions ?? ""}`.toLowerCase();
+  const jobText = `${job.title} ${job.employmentType ?? ""} ${job.description}`.toLowerCase();
+  const authorizedContract = candidateText.includes("[authorized-contract-alternative]");
+  const acceptsContract = candidate.preferredEmploymentTypes.some((value) =>
+    /contract|c2c|w2/i.test(value),
+  );
+  const isContract = /\bcontract(?:or)?\b|contract-to-hire|contract to hire|\bc2c\b|corp-to-corp|\bw2\b/.test(jobText);
+  if (!authorizedContract || !acceptsContract || !isContract) return evidence;
+
+  return {
+    ...evidence,
+    authorizationFit: "match",
+    employmentFit: "match",
+    hardBlockers: evidence.hardBlockers.filter(
+      (blocker) => !["authorization", "sponsorship", "employment_type"].includes(blocker.type),
+    ),
+    visaNotes: `${evidence.visaNotes} Candidate policy confirms contractor roles do not require sponsorship.`.trim(),
+  };
 }
 
 export async function handleRunLocalLlmExtraction(payload: unknown, context: HandlerContext): Promise<HandlerResult> {
@@ -220,11 +250,11 @@ export async function handleRunLocalLlmExtraction(payload: unknown, context: Han
       });
       const cachedLocal = reusableLocal ? cachedEvidence(reusableLocal) : null;
       if (cachedLocal) {
-        localEvidence = cachedLocal.evidence;
-        localDecision = cachedLocal.decision;
+        localEvidence = applyAuthorizedContractPolicy(cachedLocal.evidence, candidate, jobContext);
+        localDecision = decideJobMatch(localEvidence);
       } else {
         const attempt = await assessWithRetry(localProvider, { candidate, job: jobContext }, cfg.AI_MATCH_RETRY_LIMIT);
-        localEvidence = attempt.evidence;
+        localEvidence = applyAuthorizedContractPolicy(attempt.evidence, candidate, jobContext);
         localDecision = decideJobMatch(localEvidence);
         localAttempt = attempt.attempt;
         if (attempt.error) warnings.push(`Local review for ${job.title} was unavailable: ${attempt.error.message}`);
@@ -263,11 +293,12 @@ export async function handleRunLocalLlmExtraction(payload: unknown, context: Han
         });
         const cachedRemote = reusableRemote ? cachedEvidence(reusableRemote) : null;
         if (cachedRemote) {
-          finalEvidence = cachedRemote.evidence;
-          finalDecision = cachedRemote.decision;
+          finalEvidence = applyAuthorizedContractPolicy(cachedRemote.evidence, candidate, jobContext);
+          finalDecision = decideJobMatch(finalEvidence);
         } else {
           const remoteAttempt = await assessWithRetry(remoteProvider, { candidate, job: jobContext }, 1);
-          const remoteDecision = decideJobMatch(remoteAttempt.evidence);
+          const remoteEvidence = applyAuthorizedContractPolicy(remoteAttempt.evidence, candidate, jobContext);
+          const remoteDecision = decideJobMatch(remoteEvidence);
           if (remoteAttempt.error) warnings.push(`Remote review for ${job.title} was unavailable: ${remoteAttempt.error.message}`);
           await persistMatchReview({
             job,
@@ -281,12 +312,12 @@ export async function handleRunLocalLlmExtraction(payload: unknown, context: Han
               startedAt,
               attempt: remoteAttempt.attempt,
               providerSucceeded: !remoteAttempt.error,
-              evidence: remoteAttempt.evidence,
+              evidence: remoteEvidence,
               decision: remoteDecision,
               resumeVersionId,
             }),
           });
-          finalEvidence = remoteAttempt.evidence;
+          finalEvidence = remoteEvidence;
           finalDecision = remoteDecision;
         }
       }

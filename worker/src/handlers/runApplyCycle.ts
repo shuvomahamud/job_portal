@@ -6,6 +6,7 @@ import {
   addCommandEvent,
   createWorkerChildCommand,
   getActiveTargetRolesForUser,
+  getCandidateProfileForUser,
   getWorkerDb,
 } from "../db";
 import { requireCommandUserId } from "../requireCommandUserId";
@@ -16,11 +17,12 @@ import {
   selectJobsWithinRunLimits,
 } from "../apply/applyEligibility";
 import { discoveryTargetFor } from "../search/discoveryLimits";
+import { MAX_APPLICATIONS_PER_RUN } from "../../../src/lib/runLimits";
 
 const payloadSchema = z
   .object({
     phase: z.enum(["discover", "apply"]).optional(),
-    maxJobs: z.number().int().min(1).max(50).optional(),
+    maxJobs: z.number().int().min(1).max(MAX_APPLICATIONS_PER_RUN).optional(),
     mode: z.enum(["dry_run", "fill_only", "fill_and_submit"]).optional(),
     /** Job boards to search. Defaults to every supported board. */
     sources: z.array(z.enum(["indeed", "dice"])).min(1).max(2).optional(),
@@ -60,6 +62,7 @@ export async function handleRunApplyCycle(
     // dashboard a lie — asking for 50 silently became 20.
     const requestedJobs = input.maxJobs ?? cfg.JOB_APPLY_MAX_PER_RUN;
     const maxResults = discoveryTargetFor(requestedJobs);
+    const profile = await getCandidateProfileForUser(userId);
 
     const matchingCommandIds: string[] = [];
     for (const role of roles) {
@@ -70,7 +73,9 @@ export async function handleRunApplyCycle(
         requestedBy: userId,
         payloadJson: {
           sources: input.sources ?? [...ALL_SOURCES],
-          queries: [role.title],
+          queries: Array.from(
+            new Set([role.title, ...(profile?.targetTitles ?? [])]),
+          ).slice(0, 10),
           locations: role.locations.length ? role.locations : ["Remote"],
           maxResults,
           targetRoleId: role.id,
@@ -131,6 +136,14 @@ export async function handleRunApplyCycle(
     const stillRunning = children.some((child) =>
       ["pending", "claimed"].includes(child.status),
     );
+    const failed = children.some((child) => child.status === "failed");
+    if (failed) {
+      return {
+        phase,
+        jobIds: [],
+        message: "Discovery or scoring failed, so this cycle will not apply to stale jobs. Resolve the reported issue and start a new run.",
+      };
+    }
     if (stillRunning) {
       const retry = await createWorkerChildCommand({
         parentCommandId: input.parentCommandId ?? context.command.id,
@@ -169,7 +182,6 @@ export async function handleRunApplyCycle(
       jobId: schema.jobRoleMatches.jobId,
       score: schema.jobRoleMatches.score,
       targetRoleId: schema.jobRoleMatches.targetRoleId,
-      roleRunLimit: schema.targetRoles.maxApplicationsPerRun,
       source: schema.jobs.source,
     })
     .from(schema.jobRoleMatches)

@@ -16,7 +16,6 @@ export async function isApplyPaused(userId: string): Promise<boolean> {
 export type RunLimitCandidate = {
   jobId: string;
   targetRoleId: string;
-  roleRunLimit: number | null;
   /** Job board the posting came from, used to split a run across boards. */
   source?: string;
 };
@@ -41,8 +40,8 @@ export function splitAcrossSources(
 }
 
 /**
- * Selects jobs for one apply run. Counts start at zero for every invocation; historical
- * applications and earlier runs never reduce this run's allowance.
+ * Selects jobs for one apply run. The dashboard's number is the only count limit;
+ * historical applications and legacy role-level values never reduce this run's allowance.
  *
  * With more than one board chosen the allowance is split between them, so one board
  * cannot consume the whole run. A board that cannot fill its share does not waste it:
@@ -56,7 +55,6 @@ export function selectJobsWithinRunLimits(
 ): string[] {
   const selectedJobIds: string[] = [];
   const selectedJobs = new Set<string>();
-  const selectedPerRole = new Map<string, number>();
   const selectedPerSource = new Map<string, number>();
   const quotas =
     sources && sources.length > 1
@@ -67,9 +65,6 @@ export function selectJobsWithinRunLimits(
     if (selectedJobIds.length >= maxApplicationsPerRun) return;
     if (selectedJobs.has(candidate.jobId)) return;
 
-    const roleCount = selectedPerRole.get(candidate.targetRoleId) ?? 0;
-    if (candidate.roleRunLimit != null && roleCount >= candidate.roleRunLimit) return;
-
     if (respectSourceQuota && quotas && candidate.source) {
       const quota = quotas.get(candidate.source);
       const used = selectedPerSource.get(candidate.source) ?? 0;
@@ -78,7 +73,6 @@ export function selectJobsWithinRunLimits(
 
     selectedJobs.add(candidate.jobId);
     selectedJobIds.push(candidate.jobId);
-    selectedPerRole.set(candidate.targetRoleId, roleCount + 1);
     if (candidate.source) {
       selectedPerSource.set(candidate.source, (selectedPerSource.get(candidate.source) ?? 0) + 1);
     }

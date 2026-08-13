@@ -35,14 +35,15 @@ test("a small run still searches a useful number of postings", () => {
 });
 
 test("a large run is capped rather than rejected", () => {
-  assert.equal(discoveryTargetFor(50), MAX_DISCOVERY_RESULTS_PER_COMMAND);
-  assert.equal(discoveryTargetFor(500), MAX_DISCOVERY_RESULTS_PER_COMMAND);
+  assert.equal(discoveryTargetFor(50), 100);
+  assert.equal(discoveryTargetFor(500), 1_000);
+  assert.equal(discoveryTargetFor(1_000), MAX_DISCOVERY_RESULTS_PER_COMMAND);
 });
 
 test("both discovery handlers accept every target the cycle can produce", () => {
   // The real schemas, not copies: the outage was one handler holding its own literal cap
   // while the layer above it computed a larger number.
-  for (const requested of [1, 10, 20, 25, 26, 49, 50]) {
+  for (const requested of [1, 10, 20, 25, 50, 100, 500, 1_000]) {
     const maxResults = discoveryTargetFor(requested);
     const found = findMatchingJobsSchema.parse({
       queries: ["Senior .NET Full-Stack Engineer"],

@@ -9,6 +9,10 @@ import {
   JOB_STATUSES,
   PRIORITIES,
 } from "./constants";
+import {
+  MAX_APPLICATIONS_PER_RUN,
+  MAX_DISCOVERY_RESULTS_PER_COMMAND,
+} from "./runLimits";
 
 const nullableText = z.string().trim().max(20_000).nullable().optional();
 const hasHttpProtocol = (value: string) => {
@@ -84,7 +88,7 @@ const automatedSources = z
   .min(1)
   .max(2)
   .optional();
-const jobIds = z.array(z.uuid()).min(1).max(100);
+const jobIds = z.array(z.uuid()).min(1).max(MAX_APPLICATIONS_PER_RUN);
 
 export const commandPayloadSchemas = {
   find_matching_jobs: z
@@ -92,7 +96,7 @@ export const commandPayloadSchemas = {
       sources: z.array(z.enum(AUTOMATED_JOB_SOURCES)).min(1).max(2).default(["indeed", "dice"]),
       queries: z.array(z.string().trim().min(1).max(200)).min(1).max(10),
       locations: z.array(z.string().trim().min(1).max(200)).min(1).max(10),
-      maxResults: z.number().int().min(1).max(50).default(10),
+      maxResults: z.number().int().min(1).max(MAX_DISCOVERY_RESULTS_PER_COMMAND).default(10),
       targetRoleId: z.uuid().optional(),
     })
     .strict(),
@@ -109,16 +113,16 @@ export const commandPayloadSchemas = {
       sources: z.array(z.enum(AUTOMATED_JOB_SOURCES)).min(1).max(2).optional(),
       queries: z.array(z.string().trim().min(1).max(200)).min(1).max(10),
       locations: z.array(z.string().trim().min(1).max(200)).min(1).max(10).optional(),
-      maxResults: z.number().int().min(1).max(100).optional(),
+      maxResults: z.number().int().min(1).max(MAX_DISCOVERY_RESULTS_PER_COMMAND).optional(),
       sourceLimits: z
         .object({
-          indeed: z.number().int().min(0).max(100).optional(),
-          dice: z.number().int().min(0).max(100).optional(),
+          indeed: z.number().int().min(0).max(MAX_DISCOVERY_RESULTS_PER_COMMAND).optional(),
+          dice: z.number().int().min(0).max(MAX_DISCOVERY_RESULTS_PER_COMMAND).optional(),
         })
         .strict()
         .optional(),
-      maxPagesPerSearch: z.number().int().min(1).max(5).optional(),
-      maxRuntimeMinutes: z.number().int().min(1).max(30).optional(),
+      maxPagesPerSearch: z.number().int().min(1).max(10).optional(),
+      maxRuntimeMinutes: z.number().int().min(1).max(240).optional(),
       minDelayMs: z.number().int().min(5000).max(120000).optional(),
       maxDelayMs: z.number().int().min(5000).max(180000).optional(),
       dryRun: z.boolean().optional(),
@@ -142,7 +146,7 @@ export const commandPayloadSchemas = {
     .object({
       parentCommandId: z.uuid(),
       candidateProfileId: z.uuid(),
-      jobIds,
+      jobIds: z.array(z.uuid()).min(1).max(MAX_DISCOVERY_RESULTS_PER_COMMAND),
       model: z.string().trim().min(1).max(100).optional(),
       promptVersion: z.literal("job-match-prompt-v1"),
       policyVersion: z.literal("job-match-policy-v2"),
@@ -203,7 +207,7 @@ export const commandPayloadSchemas = {
   run_apply_cycle: z
     .object({
       phase: z.enum(["discover", "apply"]).optional(),
-      maxJobs: z.number().int().min(1).max(50).optional(),
+      maxJobs: z.number().int().min(1).max(MAX_APPLICATIONS_PER_RUN).optional(),
       mode: z.enum(APPLY_MODES).optional(),
       sources: z.array(z.enum(["indeed", "dice"])).min(1).max(2).optional(),
       matchingCommandIds: z.array(z.uuid()).max(50).optional(),
@@ -213,9 +217,9 @@ export const commandPayloadSchemas = {
     .strict(),
   apply_to_jobs: z
     .object({
-      jobIds: z.array(z.uuid()).min(1).max(50),
+      jobIds: z.array(z.uuid()).min(1).max(MAX_APPLICATIONS_PER_RUN),
       mode: z.enum(APPLY_MODES).optional(),
-      maxJobs: z.number().int().min(1).max(50).optional(),
+      maxJobs: z.number().int().min(1).max(MAX_APPLICATIONS_PER_RUN).optional(),
       maxRuntimeMinutes: z.number().int().min(1).max(180).optional(),
     })
     .strict(),
@@ -227,6 +231,12 @@ export const commandPayloadSchemas = {
   sync_resume_text: z
     .object({
       resumeVersionIds: z.array(z.uuid()).min(1).max(50).optional(),
+    })
+    .strict(),
+  open_browser_login: z
+    .object({
+      sites: z.array(z.enum(["indeed", "dice", "linkedin"])).min(1).max(3),
+      alertId: z.uuid().optional(),
     })
     .strict(),
 } satisfies Record<(typeof COMMAND_TYPES)[number], z.ZodType>;

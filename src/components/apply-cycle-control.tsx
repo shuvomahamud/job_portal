@@ -2,8 +2,13 @@
 
 import { useCallback, useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { CircleDot, LoaderCircle, Play, Square, TriangleAlert } from "lucide-react";
-import { startApplyCycle, stopApplyCycle } from "@/app/(dashboard)/actions";
+import { CircleDot, LoaderCircle, MonitorUp, Play, Square, TriangleAlert } from "lucide-react";
+import {
+  openBrowserToUnblock,
+  startApplyCycle,
+  stopApplyCycle,
+} from "@/app/(dashboard)/actions";
+import { MAX_APPLICATIONS_PER_RUN } from "@/lib/runLimits";
 
 type Status = {
   running: boolean;
@@ -16,6 +21,14 @@ type Status = {
     message: string;
     failedAt: string | null;
   } | null;
+  blockers: Array<{
+    id: string;
+    kind: string;
+    site: string;
+    message: string;
+    pageUrl: string | null;
+    createdAt: string;
+  }>;
   counts: {
     applied: number;
     awaitingAnswer: number;
@@ -120,10 +133,52 @@ export function ApplyCycleControl({ initial }: { initial: Status }) {
     });
   }
 
+  function unblock(alertId: string) {
+    startTransition(async () => {
+      const result = await openBrowserToUnblock(alertId);
+      setMessage(result.message);
+      await load();
+      router.refresh();
+    });
+  }
+
   const busy = pending || status.running;
 
   return (
     <section className="panel mb-6 p-5 sm:p-7">
+      {status.blockers.length > 0 && (
+        <div className="mb-5 space-y-3">
+          {status.blockers.map((blocker) => (
+            <div
+              key={blocker.id}
+              className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-amber-300 bg-amber-50 p-4"
+            >
+              <div className="flex items-start gap-3">
+                <TriangleAlert className="mt-0.5 size-5 shrink-0 text-amber-700" />
+                <div>
+                  <p className="font-semibold text-amber-950">
+                    {blocker.site} needs your attention
+                  </p>
+                  <p className="mt-1 text-sm text-amber-800">{blocker.message}</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                className="primary-button"
+                onClick={() => unblock(blocker.id)}
+                disabled={pending}
+              >
+                {pending ? (
+                  <LoaderCircle className="size-4 animate-spin" />
+                ) : (
+                  <MonitorUp className="size-4" />
+                )}
+                Open browser to unblock
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <div className="flex items-center gap-2">
@@ -178,10 +233,15 @@ export function ApplyCycleControl({ initial }: { initial: Status }) {
               <input
                 type="number"
                 min={1}
-                max={50}
+                max={MAX_APPLICATIONS_PER_RUN}
                 value={maxJobs}
                 onChange={(event) =>
-                  setMaxJobs(Math.min(50, Math.max(1, Number(event.target.value) || 1)))
+                  setMaxJobs(
+                    Math.min(
+                      MAX_APPLICATIONS_PER_RUN,
+                      Math.max(1, Number(event.target.value) || 1),
+                    ),
+                  )
                 }
               />
             </label>

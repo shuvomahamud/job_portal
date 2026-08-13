@@ -74,6 +74,7 @@ export const COMMAND_TYPES = [
   "apply_to_jobs",
   "verify_submission",
   "sync_resume_text",
+  "open_browser_login",
 ] as const;
 
 export const COMMAND_STATUSES = [

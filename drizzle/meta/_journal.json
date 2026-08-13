@@ -85,6 +85,13 @@
       "when": 1786638492590,
       "tag": "0011_snapshot_sync",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1786654070293,
+      "tag": "0012_dizzy_microchip",
+      "breakpoints": true
     }
   ]
 }

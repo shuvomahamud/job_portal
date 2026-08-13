@@ -1,7 +1,14 @@
 import "server-only";
 import { and, desc, eq, gte, inArray, sql } from "drizzle-orm";
 import { getDb } from "@/db";
-import { applications, commandEvents, commands, jobs, pendingQuestions } from "@/db/schema";
+import {
+  applications,
+  automationAlerts,
+  commandEvents,
+  commands,
+  jobs,
+  pendingQuestions,
+} from "@/db/schema";
 
 /** Command types that belong to one apply cycle, from discovery through submission. */
 const CYCLE_TYPES = [
@@ -52,6 +59,14 @@ export type ApplyCycleStatus = {
     message: string;
     failedAt: string | null;
   } | null;
+  blockers: Array<{
+    id: string;
+    kind: string;
+    site: string;
+    message: string;
+    pageUrl: string | null;
+    createdAt: string;
+  }>;
   counts: {
     applied: number;
     awaitingAnswer: number;
@@ -152,7 +167,7 @@ export async function getApplyCycleStatus(userId: string): Promise<ApplyCycleSta
 
   const failureCutoff = new Date(Date.now() - FAILURE_LOOKBACK_HOURS * 60 * 60 * 1000);
 
-  const [active, statusRows, questionRows, recentRows, failureRows] = await Promise.all([
+  const [active, statusRows, questionRows, recentRows, failureRows, blockerRows] = await Promise.all([
     db
       .select({
         id: commands.id,
@@ -211,6 +226,23 @@ export async function getApplyCycleStatus(userId: string): Promise<ApplyCycleSta
       )
       .orderBy(desc(commands.createdAt))
       .limit(1),
+    db
+      .select({
+        id: automationAlerts.id,
+        kind: automationAlerts.kind,
+        site: automationAlerts.site,
+        message: automationAlerts.message,
+        pageUrl: automationAlerts.pageUrl,
+        createdAt: automationAlerts.createdAt,
+      })
+      .from(automationAlerts)
+      .where(
+        and(
+          eq(automationAlerts.userId, userId),
+          eq(automationAlerts.status, "open"),
+        ),
+      )
+      .orderBy(desc(automationAlerts.createdAt)),
   ]);
 
   const failure = failureRows[0];
@@ -239,6 +271,11 @@ export async function getApplyCycleStatus(userId: string): Promise<ApplyCycleSta
     stopReason: row.stopReason,
     updatedAt: iso(row.updatedAt) ?? "",
   }));
+  const blockers = blockerRows.map((row) => ({
+    ...row,
+    createdAt: iso(row.createdAt) ?? "",
+  }));
+  const common = { counts, recent, lastFailure, blockers };
 
   if (!active.length) {
     if (lastFailure) {
@@ -248,9 +285,7 @@ export async function getApplyCycleStatus(userId: string): Promise<ApplyCycleSta
         detail: `The last run stopped at the ${STEP_LABELS[lastFailure.step] ?? lastFailure.step} step: ${lastFailure.message}`,
         startedAt: null,
         nextApplyAt: null,
-        counts,
-        recent,
-        lastFailure,
+        ...common,
       };
     }
     return {
@@ -259,9 +294,7 @@ export async function getApplyCycleStatus(userId: string): Promise<ApplyCycleSta
       detail: "No apply cycle is running.",
       startedAt: null,
       nextApplyAt: null,
-      counts,
-      recent,
-      lastFailure,
+      ...common,
     };
   }
 
@@ -277,9 +310,7 @@ export async function getApplyCycleStatus(userId: string): Promise<ApplyCycleSta
       detail: "Filling and submitting applications. This is paced to human speed, so it takes a while.",
       startedAt,
       nextApplyAt: null,
-      counts,
-      recent,
-      lastFailure,
+      ...common,
     };
   }
   if (has("run_local_llm_extraction")) {
@@ -289,9 +320,7 @@ export async function getApplyCycleStatus(userId: string): Promise<ApplyCycleSta
       detail: "Scoring the postings that were found against your resume.",
       startedAt,
       nextApplyAt: null,
-      counts,
-      recent,
-      lastFailure,
+      ...common,
     };
   }
   if (has("find_matching_jobs")) {
@@ -301,9 +330,7 @@ export async function getApplyCycleStatus(userId: string): Promise<ApplyCycleSta
       detail: "Searching Indeed and Dice for postings that fit your active role.",
       startedAt,
       nextApplyAt: null,
-      counts,
-      recent,
-      lastFailure,
+      ...common,
     };
   }
 
@@ -315,9 +342,7 @@ export async function getApplyCycleStatus(userId: string): Promise<ApplyCycleSta
       detail: "Discovery finished. The apply step is scheduled and will start on its own.",
       startedAt,
       nextApplyAt: iso(applyPhase.scheduledFor),
-      counts,
-      recent,
-      lastFailure,
+      ...common,
     };
   }
 
@@ -327,8 +352,6 @@ export async function getApplyCycleStatus(userId: string): Promise<ApplyCycleSta
     detail: "Queued. The worker picks this up on its next poll — make sure it is running.",
     startedAt,
     nextApplyAt: null,
-    counts,
-    recent,
-    lastFailure,
+    ...common,
   };
 }

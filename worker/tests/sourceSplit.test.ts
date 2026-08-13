@@ -13,7 +13,6 @@ const candidate = (
 ): RunLimitCandidate => ({
   jobId: id,
   targetRoleId: "role-1",
-  roleRunLimit: null,
   source,
   ...overrides,
 });
@@ -72,12 +71,12 @@ test("a single-board run is unaffected by the split", () => {
   assert.equal(selectJobsWithinRunLimits(candidates, 3, ["indeed"]).length, 3);
 });
 
-test("the per-role limit still wins over the board quota", () => {
+test("legacy per-role values do not override the limit chosen for this run", () => {
   const candidates = [
-    candidate("indeed-0", "indeed", { roleRunLimit: 1 }),
-    candidate("indeed-1", "indeed", { roleRunLimit: 1 }),
-    candidate("dice-0", "dice", { roleRunLimit: 1 }),
+    candidate("indeed-0", "indeed"),
+    candidate("indeed-1", "indeed"),
+    candidate("dice-0", "dice"),
   ];
   const selected = selectJobsWithinRunLimits(candidates, 6, ["indeed", "dice"]);
-  assert.equal(selected.length, 1, "one role with a limit of 1 yields one application");
+  assert.equal(selected.length, 3, "every eligible job can be used until the run limit");
 });

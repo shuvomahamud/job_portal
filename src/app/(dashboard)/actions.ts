@@ -6,6 +6,7 @@ import { z } from "zod";
 import { getDb } from "@/db";
 import {
   applications,
+  automationAlerts,
   automationSettings,
   candidateAddresses,
   candidateFacts,
@@ -17,6 +18,7 @@ import {
   pendingQuestions,
   resumeVersions,
   targetRoles,
+  commands,
 } from "@/db/schema";
 import { requireDashboardUser } from "@/lib/auth";
 import {
@@ -26,6 +28,7 @@ import {
 } from "@/lib/candidateFacts";
 import { FOLLOWUP_STATUSES } from "@/lib/constants";
 import { isResumeHealthyForActivation } from "@/lib/resumeHealth";
+import { MAX_APPLICATIONS_PER_RUN } from "@/lib/runLimits";
 import { followupUpdateSchema } from "@/lib/validation";
 import { cancelApplyCycle, hasApplyCycleInFlight } from "@/services/applyCycle";
 import { cancelCommand, createCommand, getCommandDetail } from "@/services/commands";
@@ -359,7 +362,7 @@ export async function createTargetRole(formData: FormData) {
       title: z.string().trim().min(1).max(200),
       locations: z.array(z.string().min(1).max(200)).min(1).max(20),
       resumeVersionId: z.uuid(),
-      maxApplicationsPerRun: z.number().int().min(1).max(50).nullable(),
+      maxApplicationsPerRun: z.number().int().min(1).max(MAX_APPLICATIONS_PER_RUN).nullable(),
       notes: z.string().trim().max(5_000).nullable(),
       active: z.boolean(),
     })
@@ -421,7 +424,7 @@ export async function updateTargetRole(formData: FormData) {
       title: z.string().trim().min(1).max(200),
       locations: z.array(z.string().min(1).max(200)).min(1).max(20),
       resumeVersionId: z.uuid(),
-      maxApplicationsPerRun: z.number().int().min(1).max(50).nullable(),
+      maxApplicationsPerRun: z.number().int().min(1).max(MAX_APPLICATIONS_PER_RUN).nullable(),
       notes: z.string().trim().max(5_000).nullable(),
       active: z.boolean(),
     })
@@ -563,7 +566,7 @@ export async function startApplyCycle(options?: {
   const input = z
     .object({
       sources: z.array(z.enum(["indeed", "dice"])).min(1).max(2).default(["indeed", "dice"]),
-      maxJobs: z.number().int().min(1).max(50).default(20),
+      maxJobs: z.number().int().min(1).max(MAX_APPLICATIONS_PER_RUN).default(20),
     })
     .parse({
       sources: options?.sources?.length ? options.sources : undefined,
@@ -637,6 +640,58 @@ export async function stopApplyCycle(): Promise<{ ok: boolean; message: string }
   return {
     ok: true,
     message: `Stopping ${canceled} step(s): ${unique}. The worker finishes what it is in the middle of and stands down, usually within a minute.`,
+  };
+}
+
+export async function openBrowserToUnblock(
+  alertId: string,
+): Promise<{ ok: boolean; message: string }> {
+  const user = await requireDashboardUser();
+  const parsedId = z.uuid().parse(alertId);
+  const db = getDb();
+  const [alert] = await db
+    .select({ id: automationAlerts.id, site: automationAlerts.site })
+    .from(automationAlerts)
+    .where(
+      and(
+        eq(automationAlerts.id, parsedId),
+        eq(automationAlerts.userId, user.id),
+        eq(automationAlerts.status, "open"),
+      ),
+    )
+    .limit(1);
+  if (!alert || !["indeed", "dice", "linkedin"].includes(alert.site)) {
+    return { ok: false, message: "That browser alert is no longer open." };
+  }
+
+  const [alreadyQueued] = await db
+    .select({ id: commands.id })
+    .from(commands)
+    .where(
+      and(
+        eq(commands.requestedBy, user.id),
+        eq(commands.type, "open_browser_login"),
+        sql`${commands.status} IN ('pending', 'claimed')`,
+      ),
+    )
+    .limit(1);
+  if (alreadyQueued) {
+    return { ok: true, message: "The visible login browser is already queued or open." };
+  }
+
+  await createCommand(
+    {
+      type: "open_browser_login",
+      payloadJson: { sites: [alert.site], alertId: alert.id },
+      priority: "urgent",
+    },
+    { source: "dashboard", requestedBy: user.id },
+  );
+  revalidatePath("/applications");
+  revalidatePath("/commands");
+  return {
+    ok: true,
+    message: `Opening the worker’s visible ${alert.site} browser. Complete the login or CAPTCHA there.`,
   };
 }
 

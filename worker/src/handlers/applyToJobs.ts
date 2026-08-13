@@ -13,12 +13,13 @@ import { effectiveMode, type ApplyMode } from "../apply/applyPolicy";
 import { betweenApplicationsMs } from "../apply/humanInput";
 import { resolveNotifyChannel } from "../notify";
 import { isApplyPaused } from "../apply/applyEligibility";
+import { MAX_APPLICATIONS_PER_RUN } from "../../../src/lib/runLimits";
 
 const payloadSchema = z
   .object({
-    jobIds: z.array(z.string().uuid()).min(1).max(50),
+    jobIds: z.array(z.string().uuid()).min(1).max(MAX_APPLICATIONS_PER_RUN),
     mode: z.enum(["dry_run", "fill_only", "fill_and_submit"]).optional(),
-    maxJobs: z.number().int().min(1).max(50).optional(),
+    maxJobs: z.number().int().min(1).max(MAX_APPLICATIONS_PER_RUN).optional(),
     maxRuntimeMinutes: z.number().int().min(1).max(180).optional(),
     /**
      * Set when a human picked this job from the board. The automated cycle only applies

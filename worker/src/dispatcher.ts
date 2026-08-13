@@ -11,6 +11,7 @@ import { handleRunRuleFilter } from "./handlers/runRuleFilter";
 import { handleRunJobSearch } from "./handlers/runJobSearch";
 import { handleSyncResumeText } from "./handlers/syncResumeText";
 import { handleVerifySubmission } from "./handlers/verifySubmission";
+import { handleOpenBrowserLogin } from "./handlers/openBrowserLogin";
 import type { CommandHandler, DashboardCommand, HandlerResult } from "./types";
 
 const phase2Handlers: Record<string, CommandHandler> = {
@@ -24,6 +25,7 @@ const phase2Handlers: Record<string, CommandHandler> = {
   apply_to_jobs: handleApplyToJobs,
   verify_submission: handleVerifySubmission,
   run_apply_cycle: handleRunApplyCycle,
+  open_browser_login: handleOpenBrowserLogin,
 };
 
 export function supportedPhase2CommandTypes() {

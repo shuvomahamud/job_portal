@@ -45,8 +45,8 @@ const envSchema = z.object({
   // Ceiling for one discovery command. Kept high enough not to strangle a large apply
   // run: the cycle asks for roughly twice its apply target, and a 25 cap silently
   // reduced a 50-application request to 25 postings found.
-  JOB_BROWSER_MAX_RESULTS_PER_COMMAND: intFromEnv(100, 1, 100),
-  JOB_BROWSER_MAX_PAGES_PER_SEARCH: intFromEnv(1, 1, 5),
+  JOB_BROWSER_MAX_RESULTS_PER_COMMAND: intFromEnv(100, 1, 2000),
+  JOB_BROWSER_MAX_PAGES_PER_SEARCH: intFromEnv(3, 1, 10),
   // "chrome" uses the installed Google Chrome binary instead of Playwright's bundled
   // Chromium. Still a separate profile directory, so the personal Chrome profile is untouched.
   JOB_BROWSER_CHANNEL: z.enum(["chrome", "msedge", "chrome-beta"]).optional(),
@@ -74,7 +74,7 @@ const envSchema = z.object({
   JOB_APPLY_QUESTION_TTL_HOURS: intFromEnv(72, 1, 720),
   JOB_APPLY_ENABLED: boolFromEnv(false),
   JOB_APPLY_MODE: z.enum(["dry_run", "fill_only", "fill_and_submit"]).default("dry_run"),
-  JOB_APPLY_MAX_PER_RUN: intFromEnv(15, 1, 50),
+  JOB_APPLY_MAX_PER_RUN: intFromEnv(15, 1, 1000),
   JOB_APPLY_MAX_MINUTES_PER_APPLICATION: intFromEnv(20, 1, 120),
   JOB_APPLY_MAX_STEPS: intFromEnv(8, 1, 20),
   JOB_APPLY_MIN_GAP_SECONDS: intFromEnv(90, 0, 3600),
@@ -100,10 +100,16 @@ export function getConfig(): WorkerConfig {
       "WORKER_HEARTBEAT_INTERVAL_SECONDS * 4 must be < 3600 so heartbeats stay inside the 60-minute stale-claim window.",
     );
   }
+  const configuredCommandTypes = parsed.WORKER_COMMAND_TYPES.split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+  if (!configuredCommandTypes.includes("open_browser_login")) {
+    configuredCommandTypes.push("open_browser_login");
+  }
   cachedConfig = {
     ...parsed,
     DASHBOARD_BASE_URL: parsed.DASHBOARD_BASE_URL.replace(/\/$/, ""),
-    workerCommandTypes: parsed.WORKER_COMMAND_TYPES.split(",").map((item) => item.trim()).filter(Boolean),
+    workerCommandTypes: configuredCommandTypes,
     ollamaAllowedRemoteHosts: parsed.OLLAMA_ALLOWED_REMOTE_HOSTS.split(",").map((item) => item.trim()).filter(Boolean),
   };
   return cachedConfig;

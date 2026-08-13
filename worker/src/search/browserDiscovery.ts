@@ -29,6 +29,19 @@ export function buildBrowserSearchUrl(spec: BrowserDiscoverySpec) {
   }
 }
 
+export function buildBrowserSearchPageUrl(
+  spec: BrowserDiscoverySpec,
+  pageNumber: number,
+) {
+  const url = new URL(buildBrowserSearchUrl(spec));
+  const page = Math.max(1, Math.floor(pageNumber));
+  if (page > 1) {
+    if (spec.source === "indeed") url.searchParams.set("start", String((page - 1) * 10));
+    else url.searchParams.set("page", String(page));
+  }
+  return url.toString();
+}
+
 export function humanDelayMs(options: HumanDelayOptions, random = Math.random) {
   const min = Math.max(1000, Math.round(options.minDelayMs));
   const max = Math.max(min, Math.round(options.maxDelayMs));

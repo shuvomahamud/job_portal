@@ -80,11 +80,6 @@ export default async function RolesPage() {
                       ? ` · ${resume.resumeTextChars} chars`
                       : ""}
                   </p>
-                  {role.maxApplicationsPerRun != null ? (
-                    <p className="mt-1 text-xs text-[var(--muted)]">
-                      Per-run limit: {role.maxApplicationsPerRun}
-                    </p>
-                  ) : null}
                   <div className="mt-4 flex flex-wrap gap-2">
                     <form action={setTargetRoleActive.bind(null, role.id, !role.active)}>
                       <button className="secondary-button" disabled={!role.active && !healthy}>
@@ -124,16 +119,6 @@ export default async function RolesPage() {
                             </option>
                           ))}
                         </select>
-                      </label>
-                      <label className="field">
-                        <span>Applications per run</span>
-                        <input
-                          name="maxApplicationsPerRun"
-                          type="number"
-                          min={1}
-                          max={50}
-                          defaultValue={role.maxApplicationsPerRun ?? ""}
-                        />
                       </label>
                       <label className="flex items-center gap-2 text-sm text-[var(--muted)]">
                         <input name="active" type="checkbox" defaultChecked={role.active} />
@@ -183,10 +168,6 @@ export default async function RolesPage() {
                       </option>
                     ))}
                   </select>
-                </label>
-                <label className="field">
-                  <span>Applications per run</span>
-                  <input name="maxApplicationsPerRun" type="number" min={1} max={50} />
                 </label>
                 <label className="field">
                   <span>Notes</span>

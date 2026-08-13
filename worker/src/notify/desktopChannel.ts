@@ -9,10 +9,12 @@
 import {
   formatQuestionsBody,
   formatQuestionsTitle,
+  formatBrowserBlockedTitle,
   type NotificationChannel,
   type NotifyAnswerAcceptedInput,
   type NotifyQuestionsInput,
   type NotifyRunSummaryInput,
+  type NotifyBrowserBlockedInput,
 } from "./channel";
 
 export const DESKTOP_NOTIFY_PREFIX = "@@JOBAGENT_NOTIFY@@";
@@ -38,6 +40,9 @@ export function createDesktopChannel(): NotificationChannel {
       if (input.blocked) parts.push(`${input.blocked} blocked`);
       if (input.failed) parts.push(`${input.failed} failed`);
       emit("Apply run finished", parts.join(" · "));
+    },
+    async notifyBrowserBlocked(input: NotifyBrowserBlockedInput) {
+      emit(formatBrowserBlockedTitle(input.kind), `${input.message}\nOpen the dashboard and choose “Open browser to unblock”.`);
     },
   };
 }
