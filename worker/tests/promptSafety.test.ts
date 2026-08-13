@@ -18,6 +18,7 @@ test("prompt keeps job text as data and schema rejects model-controlled status f
       matchingInstructions: null,
       roleTitle: "",
       resumeText: "",
+      resumeFacts: [],
     },
     job: {
       id: "prompt-safety",

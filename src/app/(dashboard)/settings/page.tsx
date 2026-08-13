@@ -11,16 +11,16 @@ import { INTEGRATIONS } from "@/lib/constants";
 const endpoints = [
   ["Hermes", "POST /api/commands", "HERMES_COMMAND_SECRET"],
   [
-    "VPS worker",
+    "Mac worker",
     "POST /api/worker/claim-command",
     "WORKER_API_SECRET",
   ],
   [
-    "VPS worker",
+    "Mac worker",
     "POST /api/worker/complete-command",
     "WORKER_API_SECRET",
   ],
-  ["VPS worker", "POST /api/worker/fail-command", "WORKER_API_SECRET"],
+  ["Mac worker", "POST /api/worker/fail-command", "WORKER_API_SECRET"],
   ["n8n", "POST /api/n8n/events", "N8N_WEBHOOK_SECRET"],
 ] as const;
 
@@ -116,7 +116,7 @@ export default function SettingsPage() {
             </div>
             <p className="mt-4 text-sm leading-6 text-[var(--muted)]">
               job-board credentials; browser cookies; Codex auth;
-              VPS SSH keys; and raw shell commands are outside the data model.
+              SSH keys; and raw shell commands are outside the data model.
             </p>
           </section>
         </aside>

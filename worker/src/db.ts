@@ -7,6 +7,7 @@ import type { NormalizedJobInput, WorkerSpawnableCommandType } from "./types";
 import type { RuleFilterResult } from "./rules/ruleEngine";
 import type { JobMatchDecision } from "./ai/matchPolicy";
 import type { JobMatchEvidence } from "./ai/matchSchema";
+import type { ResumeFact } from "./resume/extractFacts";
 
 let db: ReturnType<typeof drizzle<typeof schema>> | null = null;
 
@@ -383,6 +384,62 @@ export async function getResumeVersionForUser(resumeVersionId: string, userId: s
     )
     .limit(1);
   return row ?? null;
+}
+
+export async function getCandidateFactsForUser(userId: string) {
+  return getWorkerDb()
+    .select()
+    .from(schema.candidateFacts)
+    .where(eq(schema.candidateFacts.userId, userId))
+    .orderBy(schema.candidateFacts.factKey);
+}
+
+/**
+ * Writes freshly extracted facts. A fact the user has verified is never overwritten —
+ * re-syncing a resume must not silently undo a correction.
+ * Returns the keys actually written.
+ */
+export async function upsertCandidateFacts(input: {
+  userId: string;
+  resumeVersionId: string;
+  facts: ResumeFact[];
+}): Promise<string[]> {
+  if (!input.facts.length) return [];
+  const database = getWorkerDb();
+  const now = new Date();
+  const written: string[] = [];
+
+  for (const fact of input.facts) {
+    const [row] = await database
+      .insert(schema.candidateFacts)
+      .values({
+        userId: input.userId,
+        resumeVersionId: input.resumeVersionId,
+        factKey: fact.key,
+        factValue: fact.value,
+        confidence: fact.confidence,
+        evidence: fact.evidence,
+        source: "resume",
+        verified: false,
+        updatedAt: now,
+      })
+      .onConflictDoUpdate({
+        target: [schema.candidateFacts.userId, schema.candidateFacts.factKey],
+        set: {
+          resumeVersionId: input.resumeVersionId,
+          factValue: fact.value,
+          confidence: fact.confidence,
+          evidence: fact.evidence,
+          source: "resume",
+          updatedAt: now,
+        },
+        setWhere: eq(schema.candidateFacts.verified, false),
+      })
+      .returning({ factKey: schema.candidateFacts.factKey });
+    if (row) written.push(row.factKey);
+  }
+
+  return written;
 }
 
 export async function persistMatchReview(input: {

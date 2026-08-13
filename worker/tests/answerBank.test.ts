@@ -110,6 +110,7 @@ test("application_answers shadow common_answers but not candidate_profile.phone"
     companyAnswers: [],
     profileAnswers,
     globalAnswers: [learnedPhone, learnedSalary],
+    factAnswers: [],
     commonAnswers: [commonSalary],
   });
 

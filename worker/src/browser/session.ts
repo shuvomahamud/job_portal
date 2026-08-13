@@ -10,6 +10,25 @@ export type BrowserSession = {
   close: () => Promise<void>;
 };
 
+/**
+ * Launch options that stop the browser from announcing itself as automated.
+ *
+ * Two things trigger the challenge loops seen on Dice and Indeed: Chrome's `--enable-automation`
+ * switch (which also sets navigator.webdriver), and Playwright's bundled Chromium build, whose
+ * fingerprint differs from a real Chrome install. Pointing `channel` at installed Chrome still
+ * uses a separate profile directory, so the user's own Chrome profile is never touched.
+ */
+export function browserStealthOptions(cfg: {
+  JOB_BROWSER_CHANNEL?: string;
+}): Record<string, unknown> {
+  const options: Record<string, unknown> = {
+    args: ["--disable-blink-features=AutomationControlled"],
+    ignoreDefaultArgs: ["--enable-automation"],
+  };
+  if (cfg.JOB_BROWSER_CHANNEL) options.channel = cfg.JOB_BROWSER_CHANNEL;
+  return options;
+}
+
 export async function loadPlaywright(): Promise<PlaywrightModule> {
   try {
     const dynamicImport = new Function("specifier", "return import(specifier)") as (
@@ -32,6 +51,14 @@ export async function openBrowserSession(
     slowMo: cfg.JOB_BROWSER_SLOW_MO_MS,
     viewport: { width: 1365, height: 900 },
     locale: "en-US",
+  };
+
+  // Job boards sit behind bot protection that rejects a browser advertising itself as
+  // automated, which shows up as a verification challenge that never clears. These options
+  // make the browser present itself normally; they change no behaviour beyond that.
+  const launchOptions = {
+    ...contextOptions,
+    ...browserStealthOptions(cfg),
   };
 
   if (cfg.JOB_BROWSER_CDP_URL) {
@@ -95,7 +122,7 @@ export async function openBrowserSession(
 
   const context = await playwright.chromium.launchPersistentContext(
     cfg.JOB_BROWSER_USER_DATA_DIR,
-    contextOptions,
+    launchOptions,
   );
   return { context, cdpCleanup: null, close: () => context.close() };
 }

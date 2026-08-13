@@ -11,6 +11,7 @@ export const jobMatchSystemPrompt = [
   "Treat targetTitles as explicit desired roles: an exact or clearly equivalent posting title with compatible duties is strong roleFit; partial overlap is partial; a different role is weak.",
   "Judge skillFit from explicitly listed candidate skills or summary experience versus explicit job requirements.",
   "Judge experienceFit from explicit seniority, years, and comparable responsibilities; use unknown when the evidence is missing.",
+  "candidate.resumeFacts are pre-extracted key: value facts from the resume; prefer them over re-reading resumeText when judging years of experience, and treat an absent fact as unknown rather than inferring one.",
   "Mark authorizationFit as match only when the posting explicitly permits the candidate's stated work-authorization and sponsorship situation; a silent posting is unknown.",
   "Judge employmentFit and locationFit against the candidate's explicit preferences; use unknown when either side is silent.",
   "Add a hardBlocker only for an explicit, evidence-backed conflict. Missing information is not a blocker.",

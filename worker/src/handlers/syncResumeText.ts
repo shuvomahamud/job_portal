@@ -1,10 +1,13 @@
 import { and, eq, inArray, isNull } from "drizzle-orm";
 import { z } from "zod";
 import * as schema from "../../../src/db/schema";
-import { addCommandEvent, getWorkerDb } from "../db";
+import { getConfig } from "../config";
+import { addCommandEvent, getWorkerDb, upsertCandidateFacts } from "../db";
+import { logger } from "../logger";
 import { requireCommandUserId } from "../requireCommandUserId";
 import type { HandlerContext, HandlerResult } from "../types";
 import { extractResumeText } from "../resume/extractText";
+import { extractResumeFacts } from "../resume/extractFacts";
 import { materializeResume } from "../resume/materialize";
 
 const payloadSchema = z
@@ -43,12 +46,14 @@ export async function handleSyncResumeText(
 
   const extracted: string[] = [];
   const failed: Array<{ id: string; error: string }> = [];
+  const factKeys: string[] = [];
+  const cfg = getConfig();
 
   for (const row of rows) {
     if (context.claimGuard.lost) break;
     try {
-      if (!row.blobPathname) {
-        throw new Error("Legacy resume has no Blob object; re-upload required.");
+      if (!row.storagePath) {
+        throw new Error("This resume has no file. Add it again in JobAgent.");
       }
       const { absolutePath } = await materializeResume(row.id);
       const { text, chars, kind } = await extractResumeText(absolutePath);
@@ -69,6 +74,42 @@ export async function handleSyncResumeText(
         `Extracted ${chars} characters from ${kind.toUpperCase()} resume.`,
         { resumeVersionId: row.id, chars, kind },
       );
+
+      // Facts are a bonus on top of the text sync. A local model that is down or slow
+      // must never fail the resume sync itself, so this is best-effort.
+      try {
+        const facts = await extractResumeFacts(text, {
+          ollamaBaseUrl: cfg.OLLAMA_BASE_URL,
+          ollamaAllowedRemoteHosts: cfg.ollamaAllowedRemoteHosts,
+          ollamaRequestTimeoutMs: cfg.OLLAMA_REQUEST_TIMEOUT_MS,
+          ollamaKeepAlive: cfg.OLLAMA_KEEP_ALIVE,
+          model: cfg.OLLAMA_MODEL,
+        });
+        const written = await upsertCandidateFacts({
+          userId,
+          resumeVersionId: row.id,
+          facts,
+        });
+        factKeys.push(...written);
+        await addCommandEvent(
+          context.command.id,
+          "resume_facts_extracted",
+          `Stored ${written.length} resume fact(s) for form filling and matching.`,
+          { resumeVersionId: row.id, factKeys: written, skipped: facts.length - written.length },
+        );
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Unknown fact extraction error";
+        logger.warn("Resume fact extraction failed; text sync still succeeded", {
+          resumeVersionId: row.id,
+          error: message,
+        });
+        await addCommandEvent(
+          context.command.id,
+          "resume_facts_extraction_failed",
+          "Resume fact extraction failed; resume text was still saved.",
+          { resumeVersionId: row.id, error: message },
+        );
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown extraction error";
       failed.push({ id: row.id, error: message });
@@ -94,6 +135,7 @@ export async function handleSyncResumeText(
     failedCount: failed.length,
     extracted,
     failed,
+    factKeys: [...new Set(factKeys)],
     claimLost: context.claimGuard.lost,
   };
 }

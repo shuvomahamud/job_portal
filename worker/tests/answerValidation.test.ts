@@ -5,7 +5,6 @@ import {
   validateAnswerForQuestion,
 } from "../../src/lib/answerValidation";
 import { resolveChannel } from "../src/notify/channel";
-import { createDashboardChannel } from "../src/notify/dashboardChannel";
 
 test("validateAnswerForQuestion accepts an unambiguous option", () => {
   const result = validateAnswerForQuestion(
@@ -34,22 +33,19 @@ test("validateAnswerForQuestion rejects out-of-range years", () => {
   assert.equal(result.ok, false);
 });
 
-test("numbered Telegram replies resolve options only for long option lists", () => {
+test("numbered replies resolve options only for long option lists", () => {
   const options = Array.from({ length: 10 }, (_, index) => `Option ${index + 1}`);
   assert.equal(resolveNumberedOptionReply(options, "3"), "Option 3");
   assert.equal(resolveNumberedOptionReply(options, "11"), null);
   assert.equal(resolveNumberedOptionReply(["One", "Two"], "1"), null);
 });
 
-test("resolveChannel falls back to dashboard when Telegram is unset", () => {
-  const channel = resolveChannel(
-    { JOB_APPLY_NOTIFY_CHANNEL: "telegram" },
-    {
-      createTelegram: () => {
-        throw new Error("should not create telegram");
-      },
-      createDashboard: createDashboardChannel,
-    },
-  );
-  assert.equal(channel.name, "dashboard");
+test("resolveChannel picks desktop only when it is selected", () => {
+  const desktop = { name: "desktop" } as never;
+  const dashboard = { name: "dashboard" } as never;
+  const deps = { createDesktop: () => desktop, createDashboard: () => dashboard };
+
+  assert.equal(resolveChannel({ JOB_APPLY_NOTIFY_CHANNEL: "desktop" }, deps), desktop);
+  assert.equal(resolveChannel({ JOB_APPLY_NOTIFY_CHANNEL: "dashboard" }, deps), dashboard);
+
 });

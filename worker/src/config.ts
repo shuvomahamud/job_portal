@@ -40,6 +40,9 @@ const envSchema = z.object({
   JOB_BROWSER_NAVIGATION_TIMEOUT_MS: intFromEnv(60000, 10000, 180000),
   JOB_BROWSER_MAX_RESULTS_PER_COMMAND: intFromEnv(25, 1, 100),
   JOB_BROWSER_MAX_PAGES_PER_SEARCH: intFromEnv(1, 1, 5),
+  // "chrome" uses the installed Google Chrome binary instead of Playwright's bundled
+  // Chromium. Still a separate profile directory, so the personal Chrome profile is untouched.
+  JOB_BROWSER_CHANNEL: z.enum(["chrome", "msedge", "chrome-beta"]).optional(),
   JOB_BROWSER_CDP_URL: z.string().url().optional(),
   JOB_BROWSER_CDP_MANAGE_PAGES: boolFromEnv(false),
   JOB_BROWSER_CDP_CONNECT_TIMEOUT_MS: intFromEnv(30000, 5000, 120000),
@@ -59,15 +62,12 @@ const envSchema = z.object({
   OPENAI_REVIEW_REASONING_EFFORT: z.enum(["low", "medium", "high"]).default("medium"),
   OPENAI_REVIEW_TIMEOUT_MS: intFromEnv(90000, 1000, 180000),
   REMOTE_AI_REVIEW_MAX_PER_RUN: intFromEnv(5, 0, 50),
-  TELEGRAM_BOT_TOKEN: z.string().trim().min(1).optional(),
-  TELEGRAM_ALLOWED_CHAT_ID: z.string().trim().min(1).optional(),
-  TELEGRAM_WEBHOOK_SECRET: z.string().trim().min(8).optional(),
-  JOB_APPLY_NOTIFY_CHANNEL: z.enum(["telegram", "dashboard"]).default("dashboard"),
+  // "desktop" also raises a native notification through the JobAgent app.
+  JOB_APPLY_NOTIFY_CHANNEL: z.enum(["desktop", "dashboard"]).default("desktop"),
   JOB_APPLY_QUESTION_TTL_HOURS: intFromEnv(72, 1, 720),
   JOB_APPLY_ENABLED: boolFromEnv(false),
   JOB_APPLY_MODE: z.enum(["dry_run", "fill_only", "fill_and_submit"]).default("dry_run"),
-  JOB_APPLY_MAX_PER_DAY: intFromEnv(15, 1, 100),
-  JOB_APPLY_MAX_JOBS_PER_COMMAND: intFromEnv(5, 1, 10),
+  JOB_APPLY_MAX_PER_RUN: intFromEnv(15, 1, 50),
   JOB_APPLY_MAX_MINUTES_PER_APPLICATION: intFromEnv(20, 1, 120),
   JOB_APPLY_MAX_STEPS: intFromEnv(8, 1, 20),
   JOB_APPLY_MIN_GAP_SECONDS: intFromEnv(90, 0, 3600),

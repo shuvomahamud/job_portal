@@ -3,7 +3,6 @@ import { Layers3, RefreshCw } from "lucide-react";
 import { getDb } from "@/db";
 import { resumeVersions, targetRoles } from "@/db/schema";
 import { EmptyState, PageHeader, SectionHeading, StatusBadge } from "@/components/ui";
-import { ResumeUploader } from "@/components/resume-uploader";
 import { requireDashboardUser } from "@/lib/auth";
 import { formatDate } from "@/lib/format";
 import {
@@ -81,11 +80,11 @@ export default async function RolesPage() {
                       ? ` · ${resume.resumeTextChars} chars`
                       : ""}
                   </p>
-                  {role.maxApplicationsPerDay != null && (
+                  {role.maxApplicationsPerRun != null ? (
                     <p className="mt-1 text-xs text-[var(--muted)]">
-                      Daily cap: {role.maxApplicationsPerDay}
+                      Per-run limit: {role.maxApplicationsPerRun}
                     </p>
-                  )}
+                  ) : null}
                   <div className="mt-4 flex flex-wrap gap-2">
                     <form action={setTargetRoleActive.bind(null, role.id, !role.active)}>
                       <button className="secondary-button" disabled={!role.active && !healthy}>
@@ -127,13 +126,13 @@ export default async function RolesPage() {
                         </select>
                       </label>
                       <label className="field">
-                        <span>Daily application cap</span>
+                        <span>Applications per run</span>
                         <input
-                          name="maxApplicationsPerDay"
+                          name="maxApplicationsPerRun"
                           type="number"
                           min={1}
-                          max={100}
-                          defaultValue={role.maxApplicationsPerDay ?? ""}
+                          max={50}
+                          defaultValue={role.maxApplicationsPerRun ?? ""}
                         />
                       </label>
                       <label className="flex items-center gap-2 text-sm text-[var(--muted)]">
@@ -186,8 +185,8 @@ export default async function RolesPage() {
                   </select>
                 </label>
                 <label className="field">
-                  <span>Daily application cap</span>
-                  <input name="maxApplicationsPerDay" type="number" min={1} max={100} />
+                  <span>Applications per run</span>
+                  <input name="maxApplicationsPerRun" type="number" min={1} max={50} />
                 </label>
                 <label className="field">
                   <span>Notes</span>
@@ -211,7 +210,7 @@ export default async function RolesPage() {
           <section className="panel p-5 sm:p-6">
             <SectionHeading
               title="Resumes"
-              description="Private Blob-backed versions used by roles."
+              description="Stored by the JobAgent app and selectable per role."
             />
             <div className="space-y-3">
               {resumes.map((resume) => (
@@ -229,10 +228,9 @@ export default async function RolesPage() {
                 </div>
               ))}
             </div>
-            <details className="form-disclosure mt-4" open={!resumes.length}>
-              <summary>Upload resume</summary>
-              <ResumeUploader userId={user.id} />
-            </details>
+            <p className="mt-4 rounded-xl bg-[var(--soft)] p-4 text-xs text-[var(--muted)]">
+              Add resumes in the JobAgent app on your Mac.
+            </p>
           </section>
         </aside>
       </div>

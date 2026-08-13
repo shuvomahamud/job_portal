@@ -1,0 +1,1 @@
+ALTER TABLE "resume_versions" DROP COLUMN "blob_pathname";

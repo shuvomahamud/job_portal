@@ -41,6 +41,7 @@ export default async function ApplicationsPage({
       application: applications,
       jobTitle: jobs.title,
       company: jobs.company,
+      jobSource: jobs.source,
       roleTitle: targetRoles.title,
       matchScore: jobRoleMatches.score,
       resumeName: resumeVersions.originalFilename,
@@ -143,7 +144,7 @@ export default async function ApplicationsPage({
       <section className="panel mb-6 p-5 sm:p-7">
         <SectionHeading
           title="Per-role enable"
-          description="Pause a role without deleting it. Daily caps are edited on /roles."
+          description="Pause a role without deleting it. Per-run limits are edited on /roles."
         />
         <div className="space-y-3">
           {roles.map((role) => (
@@ -155,7 +156,9 @@ export default async function ApplicationsPage({
               <div>
                 <p className="font-medium">{role.title}</p>
                 <p className="text-xs text-[var(--muted)]">
-                  Cap {role.maxApplicationsPerDay}/day · {role.active ? "active" : "paused"}
+                  {role.maxApplicationsPerRun == null
+                    ? "Uses the global run limit"
+                    : `Limit ${role.maxApplicationsPerRun}/run`} · {role.active ? "active" : "paused"}
                 </p>
               </div>
               <button type="submit" className="secondary-button">
@@ -188,7 +191,7 @@ export default async function ApplicationsPage({
           />
         ) : (
           <div className="space-y-4">
-            {rows.map(({ application, jobTitle, company, roleTitle, matchScore, resumeName }) => {
+            {rows.map(({ application, jobTitle, company, jobSource, roleTitle, matchScore, resumeName }) => {
               const auditEvents = eventsByJob.get(application.jobId) ?? [];
               const artifactPaths = auditEvents.flatMap((event) => {
                 const artifacts = event.metadataJson?.artifacts;
@@ -208,6 +211,9 @@ export default async function ApplicationsPage({
                     <p className="text-sm text-[var(--muted)]">
                       {company ?? "Company"} · {roleTitle ?? "Role"}
                     </p>
+                    {jobSource ? (
+                      <span className="source-chip mt-1 inline-block capitalize">{jobSource}</span>
+                    ) : null}
                     <h3 className="mt-1 text-base font-semibold">{jobTitle ?? "Job"}</h3>
                     <div className="mt-2 flex flex-wrap gap-2">
                       <StatusBadge value={application.status} />

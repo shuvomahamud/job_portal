@@ -26,6 +26,9 @@
     "worker:start": "tsx worker/src/runner.ts",
     "worker:health": "tsx worker/src/health.ts",
     "worker:ollama-smoke": "tsx worker/scripts/ollama-smoke.ts",
+    "worker:login": "tsx worker/scripts/browserLogin.ts",
+    "mac-app:build": "bash mac-app/build.sh",
+    "mac-app:install": "bash mac-app/build.sh --install",
     "worker:cycle": "tsx worker/scripts/enqueueApplyCycle.ts",
     "worker:typecheck": "tsc -p worker/tsconfig.json --noEmit",
     "worker:test": "tsx --test worker/tests/*.test.ts"
@@ -33,7 +36,6 @@
   "dependencies": {
     "@clerk/nextjs": "^7.6.1",
     "@neondatabase/serverless": "^1.1.0",
-    "@vercel/blob": "^2.7.0",
     "clsx": "^2.1.1",
     "drizzle-orm": "^0.45.2",
     "lucide-react": "^1.26.0",

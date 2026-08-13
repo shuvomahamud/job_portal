@@ -20,6 +20,9 @@
 # production
 /build
 
+# compiled macOS menu bar app
+/mac-app/build
+
 # misc
 .DS_Store
 *.pem

@@ -2,6 +2,7 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 import type { NeonHttpDatabase } from "drizzle-orm/neon-http";
 import * as schema from "../../../src/db/schema";
 import { getWorkerDb } from "../db";
+import { factIsUsable, factLabel, isFactKey } from "../../../src/lib/candidateFacts";
 import { normalizeQuestion } from "./questionNormalizer";
 import { getRiskLevel } from "./riskPolicy";
 import { FIELD_CATEGORIES, type DetectedField, type FieldCategory, type SavedAnswer } from "./types";
@@ -111,19 +112,75 @@ function profileEntry(
   };
 }
 
+export type CandidateFactRow = {
+  id: string;
+  factKey: string;
+  factValue: string;
+  confidence: number;
+  verified: boolean;
+  createdAt: Date | string;
+  updatedAt: Date | string;
+};
+
+/**
+ * Turns stored resume facts into answer-bank entries. The fact key is already a
+ * FieldCategory, so matchSavedAnswer's category rule resolves them with no extra mapping.
+ *
+ * A low-confidence unverified fact is withheld: it stays visible in the UI for review but
+ * must not silently land in a real application. A user-verified fact always counts.
+ */
+export function factsToSavedAnswers(rows: CandidateFactRow[]): SavedAnswer[] {
+  const answers: SavedAnswer[] = [];
+  for (const row of rows) {
+    // Only the allowlisted fact keys, never any field category. A sensitive category
+    // reaching here would match exactly and satisfy applyPolicy's "exact saved answer"
+    // branch, which is meant for answers a human actually gave.
+    if (!isFactKey(row.factKey)) continue;
+    const value = row.factValue.trim();
+    if (!value) continue;
+    if (!factIsUsable(row)) continue;
+
+    const category = row.factKey as FieldCategory;
+    const label = factLabel(row.factKey);
+    answers.push({
+      id: `fact:${row.id}`,
+      normalizedQuestion: normalizeQuestion(label),
+      originalQuestion: label,
+      category,
+      answerValue: value,
+      answerType: "text",
+      sitePattern: "",
+      domain: "",
+      usageCount: 0,
+      createdAt: iso(row.createdAt),
+      updatedAt: iso(row.updatedAt),
+      riskLevel: getRiskLevel(category),
+      notes: row.verified
+        ? "Confirmed candidate fact."
+        : `Read from resume (confidence ${row.confidence}%).`,
+      aliases: [row.factKey.replace(/_/g, " "), label.toLowerCase()],
+    });
+  }
+  return answers;
+}
+
 /** Assemble bank in matchSavedAnswer precedence order (first hit wins). */
 export function assembleAnswerBank(parts: {
   jobAnswers: SavedAnswer[];
   companyAnswers: SavedAnswer[];
   profileAnswers: SavedAnswer[];
   globalAnswers: SavedAnswer[];
+  factAnswers: SavedAnswer[];
   commonAnswers: SavedAnswer[];
 }): SavedAnswer[] {
+  // Facts sit below anything the user typed or confirmed, above the legacy common answers:
+  // a resume reading should never override an answer the user gave for this exact question.
   return [
     ...parts.jobAnswers,
     ...parts.companyAnswers,
     ...parts.profileAnswers,
     ...parts.globalAnswers,
+    ...parts.factAnswers,
     ...parts.commonAnswers,
   ];
 }
@@ -199,7 +256,7 @@ export async function loadAnswerBank(
   const db = dbOrDefault(database);
   const companyKey = input.company.trim().toLowerCase();
 
-  const [answerRows, commonRows, profile, user] = await Promise.all([
+  const [answerRows, commonRows, factRows, profile, user] = await Promise.all([
     db
       .select()
       .from(schema.applicationAnswers)
@@ -208,6 +265,10 @@ export async function loadAnswerBank(
       .select()
       .from(schema.commonAnswers)
       .where(eq(schema.commonAnswers.userId, input.userId)),
+    db
+      .select()
+      .from(schema.candidateFacts)
+      .where(eq(schema.candidateFacts.userId, input.userId)),
     db
       .select()
       .from(schema.candidateProfiles)
@@ -238,12 +299,14 @@ export async function loadAnswerBank(
   }).filter((answer) => IDENTITY_CATEGORIES.has(answer.category));
 
   const commonMapped = commonRows.map(commonAnswerToSavedAnswer);
+  const factAnswers = factsToSavedAnswers(factRows);
 
   return assembleAnswerBank({
     jobAnswers,
     companyAnswers,
     profileAnswers,
     globalAnswers,
+    factAnswers,
     commonAnswers: commonMapped,
   });
 }
@@ -337,7 +400,10 @@ export async function learnAnswer(
 }
 
 export async function markAnswersUsed(ids: string[], database?: AnswerDb): Promise<void> {
-  const realIds = ids.filter((id) => !id.startsWith("profile:") && !id.startsWith("common:"));
+  // Synthesized entries (profile, common, fact) have no application_answers row to count.
+  const realIds = ids.filter(
+    (id) => !id.startsWith("profile:") && !id.startsWith("common:") && !id.startsWith("fact:"),
+  );
   if (!realIds.length) return;
   const db = dbOrDefault(database);
   const now = new Date();

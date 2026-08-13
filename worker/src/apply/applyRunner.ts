@@ -18,7 +18,7 @@ import {
 import { optionMatches } from "../formfill/optionMatching";
 import type { DetectedField, MatchSettings } from "../formfill/types";
 import { logger } from "../logger";
-import { resolveNotifyChannel } from "../notify";
+import { resolveNotifyChannel, type PendingQuestionSummary } from "../notify";
 import { humanDelayMs } from "../search/browserDiscovery";
 import { materializeResume } from "../resume/materialize";
 import {
@@ -31,7 +31,6 @@ import {
 import { decideFieldAction, effectiveMode, type ApplyMode } from "./applyPolicy";
 import {
   ELIGIBLE_ROLE_MATCH_STATUS,
-  getRemainingDailyCapacity,
   isApplyPaused,
 } from "./applyEligibility";
 import { adapterFor, isExternalAts, sourceUrlAllowed } from "./applySteps";
@@ -302,7 +301,6 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
       targetRoleId: schema.jobRoleMatches.targetRoleId,
       resumeVersionId: schema.jobRoleMatches.resumeVersionId,
       score: schema.jobRoleMatches.score,
-      roleDailyCap: schema.targetRoles.maxApplicationsPerDay,
     })
     .from(schema.jobRoleMatches)
     .innerJoin(schema.targetRoles, eq(schema.targetRoles.id, schema.jobRoleMatches.targetRoleId))
@@ -325,16 +323,6 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
       stopReason: "No eligible role match with a resume.",
     });
     return { stopReason: "needs_manual", artifacts };
-  }
-
-  const capacity = await getRemainingDailyCapacity({
-    userId: input.userId,
-    targetRoleId: match.targetRoleId,
-    globalCap: cfg.JOB_APPLY_MAX_PER_DAY,
-    roleCap: match.roleDailyCap,
-  });
-  if (capacity.remaining <= 0) {
-    return { stopReason: "time_limit", artifacts };
   }
 
   let resumePath: string | null = null;
@@ -630,6 +618,9 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
         const channel = resolveNotifyChannel(cfg);
         const ttlMs = cfg.JOB_APPLY_QUESTION_TTL_HOURS * 60 * 60 * 1000;
         const expiresAt = new Date(Date.now() + ttlMs);
+        // Record every gap first, then raise a single notification for the whole
+        // application — one alert listing N questions, not N alerts.
+        const recorded: Array<{ rowId: string; summary: PendingQuestionSummary }> = [];
         for (const ask of asks) {
           const id = shortId();
           const [pending] = await database
@@ -655,25 +646,38 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
                 applyUrl: activePage.url(),
                 stepIndex: step,
                 screenshotPath: stepScreenshotPath,
+                askReason: ask.reason,
               },
               expiresAt,
             })
             .returning();
-          const notified = await channel.notifyQuestion({
-            shortId: id,
-            jobTitle: input.job.title,
-            company: input.job.company,
-            questionText: ask.field.labelText,
-            options: ask.field.options,
-            required: ask.field.required,
-          });
-          if (notified.messageId && pending) {
-            await database
-              .update(schema.pendingQuestions)
-              .set({ channelMessageId: notified.messageId, updatedAt: new Date() })
-              .where(eq(schema.pendingQuestions.id, pending.id));
+          if (pending) {
+            recorded.push({
+              rowId: pending.id,
+              summary: {
+                shortId: id,
+                questionText: ask.field.labelText,
+                options: ask.field.options,
+                required: ask.field.required,
+              },
+            });
           }
         }
+
+        const notified = await channel.notifyQuestions({
+          jobTitle: input.job.title,
+          company: input.job.company,
+          questions: recorded.map((item) => item.summary),
+        });
+        for (const item of recorded) {
+          const messageId = notified.messageIds?.[item.summary.shortId];
+          if (!messageId) continue;
+          await database
+            .update(schema.pendingQuestions)
+            .set({ channelMessageId: messageId, updatedAt: new Date() })
+            .where(eq(schema.pendingQuestions.id, item.rowId));
+        }
+
         await upsertApplication({
           userId: input.userId,
           jobId: input.job.id,

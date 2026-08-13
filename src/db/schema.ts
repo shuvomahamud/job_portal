@@ -224,9 +224,8 @@ export const resumeVersions = pgTable(
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
     name: text("name").notNull(),
-    // Legacy path kept until Stage 10 cleanup. New uploads use blob_pathname.
+    // Absolute path in the JobAgent local resume store on the worker machine.
     storagePath: text("storage_path"),
-    blobPathname: text("blob_pathname"),
     originalFilename: text("original_filename"),
     mimeType: text("mime_type"),
     sizeBytes: integer("size_bytes"),
@@ -257,6 +256,46 @@ export const resumeVersions = pgTable(
   ],
 );
 
+/**
+ * Structured facts derived from a resume (or corrected by hand) so both matching and
+ * form filling read the same numbers instead of re-reading the resume blob.
+ * `factKey` is a formfill FieldCategory, which is what lets a fact answer a form field
+ * directly without any extra mapping layer.
+ */
+export const candidateFacts = pgTable(
+  "candidate_facts",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    // Provenance: which resume this was read from. Null once a human edits the value.
+    resumeVersionId: uuid("resume_version_id").references(
+      () => resumeVersions.id,
+      { onDelete: "set null" },
+    ),
+    factKey: text("fact_key").notNull(),
+    factValue: text("fact_value").notNull(),
+    /** 0-100. Extraction only auto-fills at or above FACT_MIN_CONFIDENCE. */
+    confidence: integer("confidence").default(0).notNull(),
+    /** Short quote from the resume supporting the value, for review. */
+    evidence: text("evidence").default("").notNull(),
+    source: text("source").default("resume").notNull(),
+    /** Set when a human confirms or edits. Extraction never overwrites a verified fact. */
+    verified: boolean("verified").default(false).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("candidate_facts_user_key_unique").on(table.userId, table.factKey),
+    index("candidate_facts_user_idx").on(table.userId),
+  ],
+);
+
 export const targetRoles = pgTable(
   "target_roles",
   {
@@ -273,7 +312,7 @@ export const targetRoles = pgTable(
       .notNull()
       .references(() => resumeVersions.id, { onDelete: "restrict" }),
     active: boolean("active").default(true).notNull(),
-    maxApplicationsPerDay: integer("max_applications_per_day"),
+    maxApplicationsPerRun: integer("max_applications_per_run"),
     notes: text("notes"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
@@ -668,6 +707,7 @@ export const usersRelations = relations(users, ({ one, many }) => ({
   candidateProfile: one(candidateProfiles),
   automationSettings: one(automationSettings),
   resumes: many(resumeVersions),
+  candidateFacts: many(candidateFacts),
   commonAnswers: many(commonAnswers),
   applications: many(applications),
   targetRoles: many(targetRoles),
@@ -769,7 +809,19 @@ export const commandsRelations = relations(commands, ({ one, many }) => ({
   pendingQuestions: many(pendingQuestions),
 }));
 
+export const candidateFactsRelations = relations(candidateFacts, ({ one }) => ({
+  user: one(users, {
+    fields: [candidateFacts.userId],
+    references: [users.id],
+  }),
+  resumeVersion: one(resumeVersions, {
+    fields: [candidateFacts.resumeVersionId],
+    references: [resumeVersions.id],
+  }),
+}));
+
 export type Job = typeof jobs.$inferSelect;
+export type CandidateFact = typeof candidateFacts.$inferSelect;
 export type Command = typeof commands.$inferSelect;
 export type TargetRole = typeof targetRoles.$inferSelect;
 export type JobRoleMatch = typeof jobRoleMatches.$inferSelect;

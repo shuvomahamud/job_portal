@@ -15,6 +15,7 @@ const candidate = {
   matchingInstructions: null,
       roleTitle: "",
       resumeText: "",
+      resumeFacts: [],
 };
 
 const job = {

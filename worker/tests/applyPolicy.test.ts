@@ -16,7 +16,7 @@ import {
 import { isExternalAts, sourceUrlAllowed } from "../src/apply/applySteps";
 import {
   ELIGIBLE_ROLE_MATCH_STATUS,
-  remainingDailyCapacity,
+  selectJobsWithinRunLimits,
 } from "../src/apply/applyEligibility";
 
 function field(overrides: Partial<DetectedField> = {}): DetectedField {
@@ -201,14 +201,22 @@ test("any failure after the submitting write remains submission_unknown", () => 
   assert.equal(statusAfterApplyFailure(false), "needs_manual");
 });
 
-test("daily capacity uses the tighter global or per-role cap", () => {
+test("run selection stops at the global limit and honors per-role limits", () => {
   assert.equal(ELIGIBLE_ROLE_MATCH_STATUS, "match");
-  assert.equal(
-    remainingDailyCapacity({ globalCap: 15, globalCount: 4, roleCap: 5, roleCount: 4 }).remaining,
-    1,
-  );
-  assert.equal(
-    remainingDailyCapacity({ globalCap: 15, globalCount: 15, roleCap: null, roleCount: 0 }).remaining,
-    0,
-  );
+  const candidates = [
+    { jobId: "job-1", targetRoleId: "role-a", roleRunLimit: 1 },
+    { jobId: "job-2", targetRoleId: "role-a", roleRunLimit: 1 },
+    { jobId: "job-3", targetRoleId: "role-b", roleRunLimit: null },
+    { jobId: "job-4", targetRoleId: "role-b", roleRunLimit: null },
+  ];
+  assert.deepEqual(selectJobsWithinRunLimits(candidates, 2), ["job-1", "job-3"]);
+});
+
+test("a new run starts with a fresh allowance", () => {
+  const candidates = [
+    { jobId: "job-1", targetRoleId: "role-a", roleRunLimit: 1 },
+    { jobId: "job-2", targetRoleId: "role-a", roleRunLimit: 1 },
+  ];
+  assert.deepEqual(selectJobsWithinRunLimits(candidates, 5), ["job-1"]);
+  assert.deepEqual(selectJobsWithinRunLimits(candidates, 5), ["job-1"]);
 });

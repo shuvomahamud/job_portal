@@ -72,7 +72,7 @@ The user defines **target roles** — a job title, its locations, and the resume
 The user should never have to think about Vercel, Neon, Blob, which worker is running, or Chrome. One product.
 
 ```
-target_roles (title + locations + resume + active + daily cap)
+target_roles (title + locations + resume + active + per-run limit)
     │
     └─ launchd one-shot, weekdays 09:15 / 14:15
          └─ run_apply_cycle ──► discover per role ──► one job_role_match per (job, role)
@@ -225,7 +225,7 @@ title text NOT NULL                            -- "Senior .NET Developer"
 locations text[] NOT NULL DEFAULT '{}'
 resume_version_id → resume_versions RESTRICT NOT NULL
 active boolean NOT NULL DEFAULT true
-max_applications_per_day integer               -- nullable, per-role throttle
+max_applications_per_run integer               -- nullable, resets for each run
 notes text, created_at, updated_at
 UNIQUE (user_id, title) | INDEX (user_id, active)
 ```
@@ -430,7 +430,7 @@ Auto-extraction silently mangles multi-column and scanned PDFs, and the failure 
 
 ### UI
 
-- **Create** `src/app/(dashboard)/roles/page.tsx` and its server actions — create, edit, activate, deactivate. Fields: title, locations, resume upload, per-role daily cap, notes. Shows extraction health and a "Re-extract" button that queues `sync_resume_text`.
+- **Create** `src/app/(dashboard)/roles/page.tsx` and its server actions — create, edit, activate, deactivate. Fields: title, locations, resume upload, optional per-role run limit, notes. Shows extraction health and a "Re-extract" button that queues `sync_resume_text`.
 - **Modify** `src/app/(dashboard)/profile/page.tsx` — add a "Contact & identity" fieldset for the twelve new `candidate_profile` columns. Remove the free-text resume path input.
 - **Modify** `src/app/(dashboard)/actions.ts` — extend `saveCandidateProfile`'s Zod schema and its `parse()` call; add role CRUD actions.
 - **Modify** `src/components/sidebar.tsx` and `src/proxy.ts` for the new route.
@@ -644,7 +644,7 @@ draft ──► filling ──► [awaiting_answer] ──► submitting ──�
 
 **Create** `worker/src/apply/applyRunner.ts` — `applyToJob(ctx)` returning a `stopReason` of `submitted | filled_not_submitted | dry_run | external_ats | needs_answers | blocked | stalled | canceled | time_limit | already_applied | error`.
 
-0. **Guards before any navigation.** `JOB_APPLY_ENABLED`; `job.source ∈ {indeed, dice}` **and** the `sourceUrl` hostname ends with `indeed.com` or `dice.com` — belt and braces, because `JOB_SOURCES` still contains `linkedin` and `import_jobs` still accepts it; an eligible `job_role_matches` row exists; global and per-role daily caps not reached; **and no existing application in `submitting`, `submission_unknown`, `applied`, or any post-applied state.**
+0. **Guards before any navigation.** `JOB_APPLY_ENABLED`; `job.source ∈ {indeed, dice}` **and** the `sourceUrl` hostname ends with `indeed.com` or `dice.com` — belt and braces, because `JOB_SOURCES` still contains `linkedin` and `import_jobs` still accepts it; an eligible `job_role_matches` row exists; the current run has not reached its global or per-role limit; **and no existing application in `submitting`, `submission_unknown`, `applied`, or any post-applied state.**
 1. Resolve the resume from the winning `job_role_matches` row → `materializeResume`. Any failure → `needs_manual` with the reason.
 2. **Upsert `applications` as `draft` before the first keystroke**, with `target_role_id`, `job_role_match_id`, `resume_version_id`, using `ON CONFLICT (job_id, user_id)`. A crash mid-run then leaves a recoverable trace.
 3. `goto` → `humanDelayMs` → `readingDelayMs` → screenshot `00-jobpage`.
@@ -664,11 +664,11 @@ draft ──► filling ──► [awaiting_answer] ──► submitting ──�
 
 These are rollout gates, not separate products.
 
-**Create** `worker/src/handlers/applyToJobs.ts` — payload `{ jobIds: uuid[1..10], mode?, maxJobs?, maxRuntimeMinutes? }`. Open **one** browser session for the whole command via `worker/src/browser/session.ts`. Loop jobs with `betweenApplicationsMs` between them, per-job try/catch so one failure does not lose the rest, and a `finally` block mirroring `discoverJobsBrowser.ts:199-218`.
+**Create** `worker/src/handlers/applyToJobs.ts` — payload `{ jobIds: uuid[1..50], mode?, maxJobs?, maxRuntimeMinutes? }`. Open **one** browser session for the whole command via `worker/src/browser/session.ts`. Loop jobs with `betweenApplicationsMs` between them, per-job try/catch so one failure does not lose the rest, and a `finally` block mirroring `discoverJobsBrowser.ts:199-218`.
 
 Register in `worker/src/dispatcher.ts`. Add `apply_to_jobs` to `WORKER_COMMAND_TYPES` **only in the Mac env file, never the VPS.**
 
-**Config:** `JOB_APPLY_ENABLED: boolFromEnv(false)` — mirror the kill-switch throw at `discoverJobsBrowser.ts:66-68` — plus `JOB_APPLY_MODE` (default `dry_run`), `JOB_APPLY_MAX_PER_DAY` (15), `JOB_APPLY_MAX_JOBS_PER_COMMAND` (5), `JOB_APPLY_MAX_MINUTES_PER_APPLICATION` (20), `JOB_APPLY_MAX_STEPS` (8), `JOB_APPLY_MIN_GAP_SECONDS` / `MAX_GAP_SECONDS` (90 / 420), `JOB_APPLY_ARTIFACT_DIR`, `JOB_APPLY_TRACE`, `JOB_APPLY_TRUST_LLM_ANSWERS` (false).
+**Config:** `JOB_APPLY_ENABLED: boolFromEnv(false)` — mirror the kill-switch throw at `discoverJobsBrowser.ts:66-68` — plus `JOB_APPLY_MODE` (default `dry_run`), `JOB_APPLY_MAX_PER_RUN` (15), `JOB_APPLY_MAX_MINUTES_PER_APPLICATION` (20), `JOB_APPLY_MAX_STEPS` (8), `JOB_APPLY_MIN_GAP_SECONDS` / `MAX_GAP_SECONDS` (90 / 420), `JOB_APPLY_ARTIFACT_DIR`, `JOB_APPLY_TRACE`, `JOB_APPLY_TRUST_LLM_ANSWERS` (false).
 
 **Done when:** local fixtures pass in all three modes, **including a simulated crash after Submit that lands on `submission_unknown` and is not retried by a subsequent cycle.**
 
@@ -679,7 +679,7 @@ Register in `worker/src/dispatcher.ts`. Add `apply_to_jobs` to `WORKER_COMMAND_T
 **Create** `worker/src/handlers/runApplyCycle.ts` — payload `{ phase?: "discover" | "apply", maxJobs?, mode?, matchingCommandIds?, attempt? }`. **Re-entrant and phase-based** so it never holds a claim for an hour:
 
 - **`discover`** (default): load `target_roles WHERE active`. For each, spawn `find_matching_jobs` with that role's title and locations. Then spawn a successor `run_apply_cycle` with `phase: "apply"`, `parentCommandId: self`, `scheduledFor: now + 20min`, carrying the child ids. Complete.
-- **`apply`**: if matching children are still running and `attempt < 6`, reschedule self at +10 min. Otherwise select `jobs` with an eligible `job_role_matches` row and no `applications` row for this user, order by score descending, respect global and per-role caps, take `maxJobs`, spawn `apply_to_jobs`, complete.
+- **`apply`**: if matching children are still running and `attempt < 6`, reschedule self at +10 min. Otherwise select `jobs` with an eligible `job_role_matches` row and no `applications` row for this user, order by score descending, apply the current run's global and per-role limits, take `maxJobs`, spawn `apply_to_jobs`, complete. Every new root run starts its counters at zero.
 
 This reuses `scheduledFor` and `parent_command_id`, both already indexed by `commands_queue_idx` and `commands_parent_idx`. No new scheduler primitive.
 
@@ -713,8 +713,8 @@ completed / superseded.
 1. `JOB_APPLY_ENABLED=false` → the handler throws. Confirm this.
 2. `dry_run`, one role, one real Indeed job. Read the logged plan and every screenshot. Assert nothing was typed.
 3. `fill_only`, one job, headed (`JOB_BROWSER_HEADLESS=false`). Verify by eye, then close the tab manually.
-4. `fill_and_submit`, `JOB_APPLY_MAX_JOBS_PER_COMMAND=1`, capped at one application per day, on a job the user genuinely wants.
-5. Raise caps only after reviewing confirmations, answers, screenshots, and at least one `blocked` outcome.
+4. `fill_and_submit`, `JOB_APPLY_MAX_PER_RUN=1`, capped at one application for that run, on a job the user genuinely wants.
+5. Raise per-run limits only after reviewing confirmations, answers, screenshots, and at least one `blocked` outcome.
 
 ---
 
@@ -726,7 +726,7 @@ completed / superseded.
 
 **Low.** A job eligible under two roles applies once, using the higher-scoring pair's resume; the other pair stays recorded but unused.
 
-**Stated plainly.** Automated submission violates Indeed's and Dice's terms of service, and account suspension is the realistic downside. Human pacing, daily caps, a real logged-in profile, and `detectBlocked` back-off reduce the odds but do not eliminate them. Keep this warning visible in settings.
+**Stated plainly.** Automated submission violates Indeed's and Dice's terms of service, and account suspension is the realistic downside. Human pacing, conservative per-run limits, a real logged-in profile, and `detectBlocked` back-off reduce the odds but do not eliminate them. Keep this warning visible in settings.
 
 ---
 

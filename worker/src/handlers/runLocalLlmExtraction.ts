@@ -3,12 +3,20 @@ import { decideJobMatch, type JobMatchDecision } from "../ai/matchPolicy";
 import { jobMatchEvidenceSchema, type JobMatchEvidence, type JobMatchProvider } from "../ai/matchSchema";
 import { OpenAiJobMatchProvider } from "../ai/openaiReviewClient";
 import { OllamaJobMatchProvider } from "../ai/ollamaClient";
-import { buildCandidateMatchingContext, buildJobMatchingContext, fingerprintCandidate, fingerprintJob } from "../ai/profileContext";
+import {
+  buildCandidateMatchingContext,
+  buildJobMatchingContext,
+  fingerprintCandidate,
+  fingerprintJob,
+  formatResumeFacts,
+} from "../ai/profileContext";
 import { getConfig } from "../config";
+import { FACT_MIN_CONFIDENCE } from "../resume/extractFacts";
 import {
   addCommandEvent,
   findReusableMatchReview,
   getBestEligibleRoleMatches,
+  getCandidateFactsForUser,
   getCandidateProfileById,
   getCommandById,
   getCommandStatus,
@@ -152,6 +160,9 @@ export async function handleRunLocalLlmExtraction(payload: unknown, context: Han
     roleTitle: role.title,
     locations: role.locations,
     resumeText: resume.resumeText,
+    // Must match what find_matching_jobs used, or the candidate fingerprint changes and
+    // every cached match review is needlessly re-run.
+    resumeFacts: formatResumeFacts(await getCandidateFactsForUser(userId), FACT_MIN_CONFIDENCE),
   });
   const profileFingerprint = fingerprintCandidate(candidate);
   const jobs = await getJobsByIds(input.jobIds);

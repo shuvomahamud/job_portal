@@ -98,7 +98,7 @@ export const INTEGRATIONS = [
     purpose: "Creates structured commands from your conversational interface.",
   },
   {
-    name: "VPS worker",
+    name: "Mac worker",
     variable: "WORKER_API_SECRET",
     purpose: "Claims queued work and reports completion or failure.",
   },

@@ -27,7 +27,7 @@ export default async function QuestionsPage() {
       <PageHeader
         eyebrow="Apply assistance"
         title="Pending questions"
-        description="Answer once here or via Telegram. The apply command retries automatically when nothing remains open for that job."
+        description="Answer once here. The apply command retries automatically when nothing remains open for that job."
       />
 
       <section className="panel p-5 sm:p-7">

@@ -1,13 +1,14 @@
 import { resolveChannel } from "./channel";
 import { createDashboardChannel } from "./dashboardChannel";
-import { createTelegramChannel } from "./telegramChannel";
+import { createDesktopChannel } from "./desktopChannel";
 import type { WorkerConfig } from "../config";
 
 export function resolveNotifyChannel(cfg: WorkerConfig) {
   return resolveChannel(cfg, {
-    createTelegram: createTelegramChannel,
+    createDesktop: createDesktopChannel,
     createDashboard: createDashboardChannel,
   });
 }
 
-export { createDashboardChannel, createTelegramChannel, resolveChannel };
+export { createDashboardChannel, createDesktopChannel, resolveChannel };
+export * from "./channel";

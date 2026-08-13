@@ -6,15 +6,19 @@ export const RESUME_ALLOWED_MIME_TYPES = [
 ] as const;
 
 export type ResumeHealthInput = {
-  blobPathname: string | null;
-  storagePath?: string | null;
+  /** Absolute path in the JobAgent local resume store. */
+  storagePath: string | null;
   resumeTextChars: number | null;
   extractionError: string | null;
   textExtractedAt: Date | string | null;
 };
 
+function hasFile(resume: ResumeHealthInput): boolean {
+  return Boolean(resume.storagePath);
+}
+
 export function isResumeHealthyForActivation(resume: ResumeHealthInput): boolean {
-  if (!resume.blobPathname) return false;
+  if (!hasFile(resume)) return false;
   if (resume.extractionError) return false;
   if (!resume.textExtractedAt) return false;
   if ((resume.resumeTextChars ?? 0) < RESUME_MIN_HEALTHY_CHARS) return false;
@@ -22,11 +26,7 @@ export function isResumeHealthyForActivation(resume: ResumeHealthInput): boolean
 }
 
 export function resumeHealthLabel(resume: ResumeHealthInput): string {
-  if (!resume.blobPathname) {
-    return resume.storagePath
-      ? "Legacy local path — re-upload to Blob"
-      : "Needs re-upload";
-  }
+  if (!hasFile(resume)) return "No file — add it in JobAgent";
   if (resume.extractionError) return "Extraction failed";
   if (!resume.textExtractedAt) return "Text not extracted";
   if ((resume.resumeTextChars ?? 0) < RESUME_MIN_HEALTHY_CHARS) {

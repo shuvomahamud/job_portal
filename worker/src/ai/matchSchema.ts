@@ -74,6 +74,8 @@ export type CandidateMatchingContext = {
   matchingInstructions: string | null;
   roleTitle: string;
   resumeText: string;
+  /** Structured facts read from the resume, as "key: value" lines. */
+  resumeFacts: string[];
 };
 
 export type JobMatchingContext = {

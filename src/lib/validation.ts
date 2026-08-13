@@ -205,6 +205,7 @@ export const commandPayloadSchemas = {
       phase: z.enum(["discover", "apply"]).optional(),
       maxJobs: z.number().int().min(1).max(50).optional(),
       mode: z.enum(APPLY_MODES).optional(),
+      sources: z.array(z.enum(["indeed", "dice"])).min(1).max(2).optional(),
       matchingCommandIds: z.array(z.uuid()).max(50).optional(),
       attempt: z.number().int().min(0).max(20).optional(),
       parentCommandId: z.uuid().optional(),
@@ -212,9 +213,9 @@ export const commandPayloadSchemas = {
     .strict(),
   apply_to_jobs: z
     .object({
-      jobIds: z.array(z.uuid()).min(1).max(10),
+      jobIds: z.array(z.uuid()).min(1).max(50),
       mode: z.enum(APPLY_MODES).optional(),
-      maxJobs: z.number().int().min(1).max(10).optional(),
+      maxJobs: z.number().int().min(1).max(50).optional(),
       maxRuntimeMinutes: z.number().int().min(1).max(180).optional(),
     })
     .strict(),

@@ -28,6 +28,7 @@ async function main() {
       matchingInstructions: null,
       roleTitle: "",
       resumeText: "",
+      resumeFacts: [],
     },
     job: {
       id: "smoke-job",

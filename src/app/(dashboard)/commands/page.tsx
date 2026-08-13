@@ -116,7 +116,7 @@ export default async function CommandsPage() {
       </div>
       <div className="mt-6 flex items-start gap-3 rounded-2xl border border-amber-900/10 bg-amber-100/50 p-4 text-sm leading-6 text-amber-950">
         <AlertTriangle className="mt-0.5 size-4 shrink-0" />
-        The VPS and Mac workers claim only fixed, allow-listed command types.
+        The Mac worker claims only fixed, allow-listed command types.
         Payload content is never evaluated as a shell command.
       </div>
     </>

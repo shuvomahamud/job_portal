@@ -16,9 +16,9 @@ import { isApplyPaused } from "../apply/applyEligibility";
 
 const payloadSchema = z
   .object({
-    jobIds: z.array(z.string().uuid()).min(1).max(10),
+    jobIds: z.array(z.string().uuid()).min(1).max(50),
     mode: z.enum(["dry_run", "fill_only", "fill_and_submit"]).optional(),
-    maxJobs: z.number().int().min(1).max(10).optional(),
+    maxJobs: z.number().int().min(1).max(50).optional(),
     maxRuntimeMinutes: z.number().int().min(1).max(180).optional(),
   })
   .strict();
@@ -44,9 +44,12 @@ export async function handleApplyToJobs(
     };
   }
   const mode = effectiveMode(input.mode, cfg.JOB_APPLY_MODE);
+  const runLimit = Math.min(
+    input.maxJobs ?? cfg.JOB_APPLY_MAX_PER_RUN,
+    cfg.JOB_APPLY_MAX_PER_RUN,
+  );
   const maxJobs = Math.min(
-    input.maxJobs ?? cfg.JOB_APPLY_MAX_JOBS_PER_COMMAND,
-    cfg.JOB_APPLY_MAX_JOBS_PER_COMMAND,
+    runLimit,
     input.jobIds.length,
   );
   const maxRuntimeMinutes = Math.min(
@@ -77,13 +80,15 @@ export async function handleApplyToJobs(
     skipped: 0,
   };
   const results: Array<{ jobId: string; stopReason: ApplyStopReason }> = [];
+  let runStopReason: "run_limit_reached" | "eligible_jobs_exhausted" | "blocked" | "canceled" | "time_limit" =
+    "eligible_jobs_exhausted";
 
   try {
     await addCommandEvent(
       context.command.id,
       "apply_started",
       `Apply started in mode=${mode} for ${jobIds.length} job(s).`,
-      { mode, jobIds, maxRuntimeMinutes },
+      { mode, jobIds, maxRuntimeMinutes, maxApplicationsPerRun: runLimit },
     );
 
     page = await browserSession.context.newPage();
@@ -91,9 +96,13 @@ export async function handleApplyToJobs(
     for (let index = 0; index < jobIds.length; index += 1) {
       const jobId = jobIds[index]!;
       if (context.claimGuard.lost || (await getCommandStatus(context.command.id)) === "canceled") {
+        runStopReason = "canceled";
         break;
       }
-      if (Date.now() >= deadlineAt) break;
+      if (Date.now() >= deadlineAt) {
+        runStopReason = "time_limit";
+        break;
+      }
 
       const job = byId.get(jobId);
       if (!job) {
@@ -129,6 +138,7 @@ export async function handleApplyToJobs(
         else if (result.stopReason === "needs_answers") summary.needsAnswers += 1;
         else if (result.stopReason === "blocked") {
           summary.blocked += 1;
+          runStopReason = "blocked";
           break;
         } else if (
           result.stopReason === "already_applied" ||
@@ -168,6 +178,10 @@ export async function handleApplyToJobs(
       }
     }
 
+    if (runStopReason === "eligible_jobs_exhausted" && results.length >= runLimit) {
+      runStopReason = "run_limit_reached";
+    }
+
     const channel = resolveNotifyChannel(cfg);
     await channel.notifyRunSummary({
       applied: summary.submitted,
@@ -178,8 +192,15 @@ export async function handleApplyToJobs(
 
     return {
       status: "completed",
-      resultJson: { mode, summary, results },
-      message: `Apply finished: submitted=${summary.submitted} needs_answers=${summary.needsAnswers} blocked=${summary.blocked}.`,
+      resultJson: {
+        mode,
+        runLimit,
+        attempted: results.length,
+        runStopReason,
+        summary,
+        results,
+      },
+      message: `Apply run stopped (${runStopReason}) after ${results.length}/${runLimit} job(s): submitted=${summary.submitted} needs_answers=${summary.needsAnswers} blocked=${summary.blocked}.`,
     };
   } finally {
     if (page) {

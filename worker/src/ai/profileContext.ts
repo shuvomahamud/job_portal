@@ -45,16 +45,41 @@ function list(values: string[] | null | undefined) {
   );
 }
 
+export type CandidateFactInput = {
+  factKey: string;
+  factValue: string;
+  confidence: number;
+  verified: boolean;
+};
+
+/**
+ * Facts are given to the model as explicit "key: value" lines so experienceFit can be
+ * judged from a number rather than re-derived from prose on every job.
+ * Unverified low-confidence facts are withheld — the same bar the answer bank uses.
+ */
+export function formatResumeFacts(
+  facts: CandidateFactInput[] | null | undefined,
+  minConfidence: number,
+): string[] {
+  return (facts ?? [])
+    .filter((fact) => fact.verified || fact.confidence >= minConfidence)
+    .map((fact) => `${fact.factKey}: ${text(fact.factValue, MAX_ITEM_LENGTH)}`)
+    .filter((line) => !line.endsWith(": "))
+    .sort();
+}
+
 export function buildCandidateMatchingContext(
   profile: CandidateProfileRow,
   options?: {
     roleTitle?: string;
     resumeText?: string | null;
     locations?: string[];
+    resumeFacts?: string[];
   },
 ): CandidateMatchingContext {
   const roleTitle = text(options?.roleTitle, MAX_ITEM_LENGTH);
   return {
+    resumeFacts: list(options?.resumeFacts),
     targetTitles: roleTitle ? [roleTitle] : list(profile.targetTitles),
     targetLocations: options?.locations?.length
       ? list(options.locations)

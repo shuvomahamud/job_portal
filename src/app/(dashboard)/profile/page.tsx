@@ -4,24 +4,37 @@ import {
   Link2,
   Save,
   ShieldCheck,
+  Sparkles,
+  Trash2,
 } from "lucide-react";
 import { getDb } from "@/db";
 import {
+  candidateFacts,
   candidateProfiles,
   commonAnswers,
   resumeVersions,
 } from "@/db/schema";
 import { PageHeader, SectionHeading } from "@/components/ui";
 import { requireDashboardUser } from "@/lib/auth";
+import {
+  FACT_KEYS,
+  factIsUsable,
+  factLabel,
+  type FactKey,
+} from "@/lib/candidateFacts";
 import { formatDate } from "@/lib/format";
-import { saveCandidateProfile, saveCommonAnswer } from "../actions";
-import { ResumeUploader } from "@/components/resume-uploader";
+import {
+  deleteCandidateFact,
+  saveCandidateFact,
+  saveCandidateProfile,
+  saveCommonAnswer,
+} from "../actions";
 import { resumeHealthLabel } from "@/lib/resumeHealth";
 
 export default async function ProfilePage() {
   const user = await requireDashboardUser();
   const db = getDb();
-  const [profiles, resumes, answers] = await Promise.all([
+  const [profiles, resumes, answers, facts] = await Promise.all([
     db
       .select()
       .from(candidateProfiles)
@@ -37,8 +50,15 @@ export default async function ProfilePage() {
       .from(commonAnswers)
       .where(eq(commonAnswers.userId, user.id))
       .orderBy(commonAnswers.category, commonAnswers.questionKey),
+    db
+      .select()
+      .from(candidateFacts)
+      .where(eq(candidateFacts.userId, user.id))
+      .orderBy(candidateFacts.factKey),
   ]);
   const profile = profiles[0];
+  const factByKey = new Map(facts.map((fact) => [fact.factKey, fact]));
+  const usableFactCount = facts.filter(factIsUsable).length;
 
   return (
     <>
@@ -243,7 +263,7 @@ export default async function ProfilePage() {
             </div>
             <p className="mt-4 text-sm leading-6 text-[var(--muted)]">
               Do not store account passwords, browser cookies, Codex credentials,
-              or VPS access keys here. The profile contains application facts
+              or access keys here. The profile contains application facts
               only.
             </p>
           </section>
@@ -251,7 +271,7 @@ export default async function ProfilePage() {
           <section className="panel p-5 sm:p-6">
             <SectionHeading
               title="Resume versions"
-              description="Private Blob uploads only. Legacy path-based resumes must be re-uploaded."
+              description="Managed by the JobAgent app on your Mac. Add or remove resumes there."
             />
             <div className="space-y-3">
               {resumes.map((resume) => (
@@ -266,7 +286,7 @@ export default async function ProfilePage() {
                     )}
                   </div>
                   <p className="mt-2 truncate text-xs text-[var(--muted)]">
-                    {resume.originalFilename ?? resume.blobPathname ?? resume.storagePath ?? "No file"}
+                    {resume.originalFilename ?? resume.storagePath ?? "No file"}
                   </p>
                   <p className="mt-1 text-xs text-[var(--muted)]">
                     {resumeHealthLabel(resume)} · Added {formatDate(resume.createdAt)}
@@ -279,13 +299,92 @@ export default async function ProfilePage() {
                 </p>
               )}
             </div>
-            <details className="form-disclosure mt-4" open>
-              <summary>Upload a resume</summary>
-              <ResumeUploader userId={user.id} />
-            </details>
+            <p className="mt-4 rounded-xl bg-[var(--soft)] p-4 text-xs text-[var(--muted)]">
+              Resumes are stored by the JobAgent app on your Mac. Open its Resumes tab to
+              add one, set the default, or remove it.
+            </p>
           </section>
         </aside>
       </div>
+
+      <section className="panel mt-6 p-5 sm:p-7">
+        <SectionHeading
+          title="Resume facts"
+          description="Read from your resume when it is synced, then used to answer application fields automatically. Confirm or correct anything wrong — a confirmed fact is never overwritten by a later resume sync."
+        />
+        <p className="mb-5 rounded-xl border border-[var(--line)] bg-[var(--soft)] p-3 text-sm text-[var(--muted)]">
+          {usableFactCount} of {FACT_KEYS.length} facts are confident enough to fill a form.
+          Anything below {" "}
+          <span className="font-mono text-xs">70%</span> confidence is shown here for review
+          but will still be asked as a question during an application.
+        </p>
+        <div className="grid gap-3 sm:grid-cols-2">
+          {FACT_KEYS.map((key: FactKey) => {
+            const fact = factByKey.get(key);
+            const usable = fact ? factIsUsable(fact) : false;
+            return (
+              <div
+                key={key}
+                className="rounded-2xl border border-[var(--line)] bg-white/55 p-4"
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="font-semibold text-[var(--ink)]">{factLabel(key)}</p>
+                  {fact ? (
+                    <span className="source-chip">
+                      {fact.verified
+                        ? "Confirmed"
+                        : usable
+                          ? `${fact.confidence}% confident`
+                          : `${fact.confidence}% — will ask`}
+                    </span>
+                  ) : (
+                    <span className="source-chip">Not found</span>
+                  )}
+                </div>
+                <form action={saveCandidateFact} className="mt-3 flex items-end gap-2">
+                  <input type="hidden" name="factKey" value={key} />
+                  <label className="field flex-1">
+                    <span className="sr-only">{factLabel(key)}</span>
+                    <input
+                      name="factValue"
+                      required
+                      defaultValue={fact?.factValue ?? ""}
+                      placeholder={
+                        key.startsWith("years_") ? "Whole number of years" : "Not set"
+                      }
+                    />
+                  </label>
+                  <button className="primary-button" aria-label={`Confirm ${factLabel(key)}`}>
+                    <Save className="size-4" />
+                  </button>
+                </form>
+                {fact?.evidence && (
+                  <p className="mt-3 border-l-2 border-[var(--line)] pl-3 text-xs italic leading-5 text-[var(--muted)]">
+                    “{fact.evidence}”
+                  </p>
+                )}
+                {fact && (
+                  <form action={deleteCandidateFact} className="mt-3">
+                    <input type="hidden" name="factId" value={fact.id} />
+                    <button className="inline-flex items-center gap-1.5 text-xs text-[var(--muted)] hover:text-[var(--ink)]">
+                      <Trash2 className="size-3.5" /> Remove
+                    </button>
+                  </form>
+                )}
+              </div>
+            );
+          })}
+        </div>
+        {!facts.length && (
+          <div className="empty-state mt-5">
+            <Sparkles className="mx-auto size-6 text-[var(--muted)]" />
+            <p className="mt-3 text-sm text-[var(--muted)]">
+              No facts read yet. They are extracted the next time a resume is synced, or
+              you can fill them in above.
+            </p>
+          </div>
+        )}
+      </section>
 
       <section className="panel mt-6 p-5 sm:p-7">
         <SectionHeading

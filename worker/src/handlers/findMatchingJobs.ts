@@ -1,32 +1,27 @@
 import { z } from "zod";
-import { buildCandidateMatchingContext, isMatchingProfileComplete } from "../ai/profileContext";
+import {
+  buildCandidateMatchingContext,
+  formatResumeFacts,
+  isMatchingProfileComplete,
+} from "../ai/profileContext";
 import { evaluateProfileHardFilter } from "../ai/hardFilter";
 import {
   addCommandEvent,
   createWorkerChildCommand,
   getActiveTargetRolesForUser,
+  getCandidateFactsForUser,
   getCandidateProfileForUser,
   getJobsByIds,
   getResumeVersionForUser,
   getTargetRoleForUser,
   upsertJobRoleMatch,
 } from "../db";
+import { FACT_MIN_CONFIDENCE } from "../resume/extractFacts";
 import { requireCommandUserId } from "../requireCommandUserId";
 import { handleDiscoverJobsBrowser } from "./discoverJobsBrowser";
 import type { HandlerContext, HandlerResult } from "../types";
-
-function isResumeHealthyForActivation(resume: {
-  blobPathname: string | null;
-  resumeTextChars: number | null;
-  extractionError: string | null;
-  textExtractedAt: Date | string | null;
-}) {
-  if (!resume.blobPathname) return false;
-  if (resume.extractionError) return false;
-  if (!resume.textExtractedAt) return false;
-  if ((resume.resumeTextChars ?? 0) < 800) return false;
-  return true;
-}
+// Shared with the dashboard so both agree on what makes a resume usable.
+import { isResumeHealthyForActivation } from "../../../src/lib/resumeHealth";
 
 const payloadSchema = z
   .object({
@@ -60,6 +55,11 @@ export async function handleFindMatchingJobs(payload: unknown, context: HandlerC
     throw new Error("Create and activate at least one target role with a healthy resume before finding matching jobs.");
   }
 
+  const resumeFacts = formatResumeFacts(
+    await getCandidateFactsForUser(userId),
+    FACT_MIN_CONFIDENCE,
+  );
+
   const roleResults = [];
 
   for (const role of roles) {
@@ -81,6 +81,7 @@ export async function handleFindMatchingJobs(payload: unknown, context: HandlerC
       roleTitle: role.title,
       locations: role.locations,
       resumeText: resume.resumeText,
+      resumeFacts,
     });
     if (!isMatchingProfileComplete(candidate)) {
       throw new Error(

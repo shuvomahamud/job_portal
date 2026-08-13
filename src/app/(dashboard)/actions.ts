@@ -7,6 +7,7 @@ import { getDb } from "@/db";
 import {
   applications,
   automationSettings,
+  candidateFacts,
   candidateProfiles,
   commandEvents,
   commonAnswers,
@@ -17,6 +18,11 @@ import {
   targetRoles,
 } from "@/db/schema";
 import { requireDashboardUser } from "@/lib/auth";
+import {
+  FACT_KEYS,
+  YEARS_FACT_KEYS,
+  normalizeYearsValue,
+} from "@/lib/candidateFacts";
 import { FOLLOWUP_STATUSES } from "@/lib/constants";
 import { isResumeHealthyForActivation } from "@/lib/resumeHealth";
 import { followupUpdateSchema } from "@/lib/validation";
@@ -152,6 +158,66 @@ export async function saveCommonAnswer(formData: FormData) {
   revalidatePath("/profile");
 }
 
+/**
+ * Confirms or corrects a resume-derived fact. Saving marks it verified, which both makes
+ * it usable regardless of extraction confidence and protects it from being overwritten
+ * the next time the resume is re-synced.
+ */
+export async function saveCandidateFact(formData: FormData) {
+  const user = await requireDashboardUser();
+  const input = z
+    .object({
+      factKey: z.enum(FACT_KEYS),
+      factValue: z.string().trim().min(1).max(200),
+    })
+    .parse({
+      factKey: requiredString(formData, "factKey"),
+      factValue: requiredString(formData, "factValue"),
+    });
+
+  let value = input.factValue;
+  if (YEARS_FACT_KEYS.has(input.factKey)) {
+    const normalized = normalizeYearsValue(value);
+    if (!normalized) {
+      throw new Error("Years must be a whole number between 0 and 60.");
+    }
+    value = normalized;
+  }
+
+  await getDb()
+    .insert(candidateFacts)
+    .values({
+      userId: user.id,
+      factKey: input.factKey,
+      factValue: value,
+      confidence: 100,
+      evidence: "",
+      source: "user",
+      verified: true,
+    })
+    .onConflictDoUpdate({
+      target: [candidateFacts.userId, candidateFacts.factKey],
+      set: {
+        factValue: value,
+        confidence: 100,
+        source: "user",
+        verified: true,
+        resumeVersionId: null,
+        updatedAt: new Date(),
+      },
+    });
+  revalidatePath("/profile");
+}
+
+export async function deleteCandidateFact(formData: FormData) {
+  const user = await requireDashboardUser();
+  const factId = z.uuid().parse(requiredString(formData, "factId"));
+  await getDb()
+    .delete(candidateFacts)
+    .where(and(eq(candidateFacts.id, factId), eq(candidateFacts.userId, user.id)));
+  revalidatePath("/profile");
+}
+
 export async function queueJobReview(jobId: string) {
   const user = await requireDashboardUser();
   const id = z.uuid().parse(jobId);
@@ -246,7 +312,7 @@ export async function createTargetRole(formData: FormData) {
       title: z.string().trim().min(1).max(200),
       locations: z.array(z.string().min(1).max(200)).min(1).max(20),
       resumeVersionId: z.uuid(),
-      maxApplicationsPerDay: z.number().int().min(1).max(100).nullable(),
+      maxApplicationsPerRun: z.number().int().min(1).max(50).nullable(),
       notes: z.string().trim().max(5_000).nullable(),
       active: z.boolean(),
     })
@@ -254,8 +320,8 @@ export async function createTargetRole(formData: FormData) {
       title: requiredString(formData, "title"),
       locations: commaList(formData, "locations"),
       resumeVersionId: requiredString(formData, "resumeVersionId"),
-      maxApplicationsPerDay: optionalString(formData, "maxApplicationsPerDay")
-        ? Number(requiredString(formData, "maxApplicationsPerDay"))
+      maxApplicationsPerRun: optionalString(formData, "maxApplicationsPerRun")
+        ? Number(requiredString(formData, "maxApplicationsPerRun"))
         : null,
       notes: optionalString(formData, "notes"),
       active: formData.get("active") === "on",
@@ -272,7 +338,7 @@ export async function createTargetRole(formData: FormData) {
     title: input.title,
     locations: input.locations,
     resumeVersionId: input.resumeVersionId,
-    maxApplicationsPerDay: input.maxApplicationsPerDay,
+    maxApplicationsPerRun: input.maxApplicationsPerRun,
     notes: input.notes,
     active: input.active,
   });
@@ -287,7 +353,7 @@ export async function updateTargetRole(formData: FormData) {
       title: z.string().trim().min(1).max(200),
       locations: z.array(z.string().min(1).max(200)).min(1).max(20),
       resumeVersionId: z.uuid(),
-      maxApplicationsPerDay: z.number().int().min(1).max(100).nullable(),
+      maxApplicationsPerRun: z.number().int().min(1).max(50).nullable(),
       notes: z.string().trim().max(5_000).nullable(),
       active: z.boolean(),
     })
@@ -295,8 +361,8 @@ export async function updateTargetRole(formData: FormData) {
       title: requiredString(formData, "title"),
       locations: commaList(formData, "locations"),
       resumeVersionId: requiredString(formData, "resumeVersionId"),
-      maxApplicationsPerDay: optionalString(formData, "maxApplicationsPerDay")
-        ? Number(requiredString(formData, "maxApplicationsPerDay"))
+      maxApplicationsPerRun: optionalString(formData, "maxApplicationsPerRun")
+        ? Number(requiredString(formData, "maxApplicationsPerRun"))
         : null,
       notes: optionalString(formData, "notes"),
       active: formData.get("active") === "on",
@@ -314,7 +380,7 @@ export async function updateTargetRole(formData: FormData) {
       title: input.title,
       locations: input.locations,
       resumeVersionId: input.resumeVersionId,
-      maxApplicationsPerDay: input.maxApplicationsPerDay,
+      maxApplicationsPerRun: input.maxApplicationsPerRun,
       notes: input.notes,
       active: input.active,
       updatedAt: new Date(),

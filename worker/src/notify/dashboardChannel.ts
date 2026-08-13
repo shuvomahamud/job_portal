@@ -4,7 +4,7 @@ import type { NotificationChannel } from "./channel";
 export function createDashboardChannel(): NotificationChannel {
   return {
     name: "dashboard",
-    async notifyQuestion() {
+    async notifyQuestions() {
       return {};
     },
     async notifyAnswerAccepted() {},
