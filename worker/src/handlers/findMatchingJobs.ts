@@ -11,6 +11,7 @@ import {
   getActiveTargetRolesForUser,
   getCandidateFactsForUser,
   getCandidateProfileForUser,
+  getCommandStatus,
   getJobsByIds,
   getResumeVersionForUser,
   getTargetRoleForUser,
@@ -164,6 +165,23 @@ export async function handleFindMatchingJobs(payload: unknown, context: HandlerC
         continue;
       }
       candidateJobIds.push(job.id);
+    }
+
+    // Stopping the cycle has to stop what comes next, not just what is running. The
+    // dashboard's cancel sweep has already passed by the time discovery returns, so a
+    // scoring command queued now would survive it and the run would carry on scoring.
+    if (context.claimGuard.lost || (await getCommandStatus(context.command.id)) === "canceled") {
+      roleResults.push({
+        targetRoleId: role.id,
+        title: role.title,
+        resumeVersionId: resume.id,
+        discoveredCount: discovery.discoveredCount,
+        candidateJobIds,
+        rejectedJobIds,
+        matchingCommandId: null,
+        warnings: [...(discovery.warnings ?? []), "Stopped before scoring; postings found so far were kept."],
+      });
+      break;
     }
 
     let matchingCommandId: string | null = null;

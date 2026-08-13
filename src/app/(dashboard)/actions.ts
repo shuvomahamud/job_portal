@@ -27,7 +27,7 @@ import {
 import { FOLLOWUP_STATUSES } from "@/lib/constants";
 import { isResumeHealthyForActivation } from "@/lib/resumeHealth";
 import { followupUpdateSchema } from "@/lib/validation";
-import { hasApplyCycleInFlight } from "@/services/applyCycle";
+import { cancelApplyCycle, hasApplyCycleInFlight } from "@/services/applyCycle";
 import { cancelCommand, createCommand, getCommandDetail } from "@/services/commands";
 
 const requiredString = (formData: FormData, key: string) =>
@@ -612,6 +612,31 @@ export async function startApplyCycle(options?: {
   return {
     ok: true,
     message: `Apply cycle started. Searching now — progress appears below.${split}`,
+  };
+}
+
+/**
+ * Stops the running apply cycle.
+ *
+ * The worker polls command status at its own checkpoints, so this marks the work canceled
+ * and the worker stands down when it next looks — it is not a kill switch for the browser
+ * that is open right now.
+ */
+export async function stopApplyCycle(): Promise<{ ok: boolean; message: string }> {
+  const user = await requireDashboardUser();
+  const { canceled, steps } = await cancelApplyCycle(user.id);
+
+  revalidatePath("/applications");
+  revalidatePath("/commands");
+
+  if (!canceled) {
+    return { ok: false, message: "Nothing is running, so there was nothing to stop." };
+  }
+
+  const unique = [...new Set(steps)].join(", ");
+  return {
+    ok: true,
+    message: `Stopping ${canceled} step(s): ${unique}. The worker finishes what it is in the middle of and stands down, usually within a minute.`,
   };
 }
 

@@ -1,7 +1,7 @@
 import { withClaimHeartbeat } from "./claimHeartbeat";
 import { getConfig, sleep } from "./config";
 import { claimCommand, completeCommand, failCommand } from "./dashboardClient";
-import { addCommandEvent, recoverStaleClaims } from "./db";
+import { addCommandEvent, getCommandStatus, recoverStaleClaims } from "./db";
 import { dispatchCommand, supportedPhase2CommandTypes } from "./dispatcher";
 import { logger } from "./logger";
 import { verifyOllamaHealth } from "./ai/ollamaClient";
@@ -17,6 +17,15 @@ process.on("SIGTERM", () => {
   stopping = true;
   logger.warn("Received SIGTERM; stopping after current command.");
 });
+
+/** Best-effort: if this check itself fails, fall back to normal failure reporting. */
+async function wasCanceled(commandId: string): Promise<boolean> {
+  try {
+    return (await getCommandStatus(commandId)) === "canceled";
+  } catch {
+    return false;
+  }
+}
 
 async function processCommand(command: DashboardCommand) {
   logger.info("Processing command", { commandId: command.id, type: command.type });
@@ -34,6 +43,17 @@ async function processCommand(command: DashboardCommand) {
     logger.info("Completed command", { commandId: command.id, type: command.type });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown worker error";
+    // A command the user stopped is not a failure. The dashboard already set it to
+    // canceled and recorded why, which also means completeCommand and failCommand both
+    // reject it for no longer being claimed — so reporting it would put two alarming
+    // errors in the log for something that was asked for on purpose.
+    if (await wasCanceled(command.id)) {
+      logger.info("Command stopped from the dashboard", {
+        commandId: command.id,
+        type: command.type,
+      });
+      return;
+    }
     logger.error("Command failed", { commandId: command.id, type: command.type, error: message });
     try {
       await failCommand(command.id, message, { failedAt: new Date().toISOString() });

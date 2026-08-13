@@ -1,7 +1,7 @@
 import "server-only";
 import { and, desc, eq, gte, inArray, sql } from "drizzle-orm";
 import { getDb } from "@/db";
-import { applications, commands, jobs, pendingQuestions } from "@/db/schema";
+import { applications, commandEvents, commands, jobs, pendingQuestions } from "@/db/schema";
 
 /** Command types that belong to one apply cycle, from discovery through submission. */
 const CYCLE_TYPES = [
@@ -89,6 +89,57 @@ export async function hasApplyCycleInFlight(userId: string): Promise<boolean> {
     )
     .limit(1);
   return Boolean(row);
+}
+
+/**
+ * Stops everything belonging to the user's cycle: the parent, the search, the scoring
+ * child, and the apply phase waiting on its timer.
+ *
+ * Cancelling only the command that happens to be running now would leave the scheduled
+ * apply phase behind to start on its own twenty minutes later, which is not what anyone
+ * pressing "stop" means.
+ *
+ * The worker notices at its next checkpoint rather than instantly — it re-reads command
+ * status between search pages and between applications, and an application already being
+ * filled is checked once more before the submit click. So a stop lands within about a
+ * minute, and never abandons a half-filled form mid-submit.
+ */
+export async function cancelApplyCycle(
+  userId: string,
+): Promise<{ canceled: number; steps: string[] }> {
+  const db = getDb();
+  const stopped = await db
+    .update(commands)
+    .set({
+      status: "canceled",
+      errorMessage: "Stopped by user from the dashboard.",
+      completedAt: new Date(),
+      updatedAt: new Date(),
+    })
+    .where(
+      and(
+        eq(commands.requestedBy, userId),
+        inArray(commands.type, [...CYCLE_TYPES]),
+        inArray(commands.status, [...IN_FLIGHT]),
+      ),
+    )
+    .returning({ id: commands.id, type: commands.type });
+
+  if (stopped.length) {
+    await db.insert(commandEvents).values(
+      stopped.map((command) => ({
+        commandId: command.id,
+        eventType: "canceled",
+        message: "Apply cycle stopped from the dashboard.",
+        metadataJson: { requestedBy: userId },
+      })),
+    );
+  }
+
+  return {
+    canceled: stopped.length,
+    steps: stopped.map((command) => STEP_LABELS[command.type] ?? command.type),
+  };
 }
 
 function iso(value: Date | string | null | undefined): string | null {

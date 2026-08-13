@@ -2,8 +2,8 @@
 
 import { useCallback, useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { CircleDot, LoaderCircle, Play, TriangleAlert } from "lucide-react";
-import { startApplyCycle } from "@/app/(dashboard)/actions";
+import { CircleDot, LoaderCircle, Play, Square, TriangleAlert } from "lucide-react";
+import { startApplyCycle, stopApplyCycle } from "@/app/(dashboard)/actions";
 
 type Status = {
   running: boolean;
@@ -111,6 +111,15 @@ export function ApplyCycleControl({ initial }: { initial: Status }) {
     });
   }
 
+  function stop() {
+    startTransition(async () => {
+      const result = await stopApplyCycle();
+      setMessage(result.message);
+      await load();
+      router.refresh();
+    });
+  }
+
   const busy = pending || status.running;
 
   return (
@@ -178,23 +187,38 @@ export function ApplyCycleControl({ initial }: { initial: Status }) {
             </label>
           </fieldset>
 
-          <button
-            className="primary-button"
-            type="button"
-            onClick={start}
-            disabled={busy}
-            title={status.running ? "A cycle is already running" : undefined}
-          >
-            {busy ? (
-              <>
-                <LoaderCircle className="size-4 animate-spin" /> Running
-              </>
-            ) : (
-              <>
-                <Play className="size-4" /> Run apply cycle
-              </>
-            )}
-          </button>
+          {status.running ? (
+            // Deliberately the only button while a cycle is in flight: starting a second
+            // one would apply to the same jobs twice.
+            <button
+              className="primary-button"
+              type="button"
+              onClick={stop}
+              disabled={pending}
+            >
+              {pending ? (
+                <>
+                  <LoaderCircle className="size-4 animate-spin" /> Stopping
+                </>
+              ) : (
+                <>
+                  <Square className="size-4" /> Stop cycle
+                </>
+              )}
+            </button>
+          ) : (
+            <button className="primary-button" type="button" onClick={start} disabled={pending}>
+              {pending ? (
+                <>
+                  <LoaderCircle className="size-4 animate-spin" /> Starting
+                </>
+              ) : (
+                <>
+                  <Play className="size-4" /> Run apply cycle
+                </>
+              )}
+            </button>
+          )}
         </div>
       </div>
 
