@@ -257,6 +257,48 @@ export const resumeVersions = pgTable(
 );
 
 /**
+ * Mailing addresses the candidate can apply from. The apply runner picks whichever one
+ * is nearest the posting, so a New York job is filled with the New York address and an
+ * Albany job with the Albany one.
+ *
+ * `matchTerms` holds the city and metro names that count as "near" this address; the
+ * posting's location text is matched against them. Postings with no usable location
+ * (remote, "USA") fall back to the address flagged `isPrimary`.
+ */
+export const candidateAddresses = pgTable(
+  "candidate_addresses",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    label: text("label").notNull(),
+    line1: text("line1").notNull(),
+    line2: text("line2"),
+    city: text("city").notNull(),
+    stateRegion: text("state_region").notNull(),
+    postalCode: text("postal_code").notNull(),
+    country: text("country").default("United States").notNull(),
+    /** Used when a posting's location matches nothing, e.g. a remote role. */
+    isPrimary: boolean("is_primary").default(false).notNull(),
+    matchTerms: text("match_terms")
+      .array()
+      .default(sql`ARRAY[]::text[]`)
+      .notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("candidate_addresses_user_label_unique").on(table.userId, table.label),
+    index("candidate_addresses_user_idx").on(table.userId),
+  ],
+);
+
+/**
  * Structured facts derived from a resume (or corrected by hand) so both matching and
  * form filling read the same numbers instead of re-reading the resume blob.
  * `factKey` is a formfill FieldCategory, which is what lets a fact answer a form field
@@ -708,6 +750,7 @@ export const usersRelations = relations(users, ({ one, many }) => ({
   automationSettings: one(automationSettings),
   resumes: many(resumeVersions),
   candidateFacts: many(candidateFacts),
+  candidateAddresses: many(candidateAddresses),
   commonAnswers: many(commonAnswers),
   applications: many(applications),
   targetRoles: many(targetRoles),
@@ -820,8 +863,16 @@ export const candidateFactsRelations = relations(candidateFacts, ({ one }) => ({
   }),
 }));
 
+export const candidateAddressesRelations = relations(candidateAddresses, ({ one }) => ({
+  user: one(users, {
+    fields: [candidateAddresses.userId],
+    references: [users.id],
+  }),
+}));
+
 export type Job = typeof jobs.$inferSelect;
 export type CandidateFact = typeof candidateFacts.$inferSelect;
+export type CandidateAddress = typeof candidateAddresses.$inferSelect;
 export type Command = typeof commands.$inferSelect;
 export type TargetRole = typeof targetRoles.$inferSelect;
 export type JobRoleMatch = typeof jobRoleMatches.$inferSelect;

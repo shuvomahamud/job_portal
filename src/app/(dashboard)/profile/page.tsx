@@ -2,6 +2,7 @@ import { desc, eq } from "drizzle-orm";
 import {
   BookOpenText,
   Link2,
+  MapPin,
   Save,
   ShieldCheck,
   Sparkles,
@@ -9,11 +10,13 @@ import {
 } from "lucide-react";
 import { getDb } from "@/db";
 import {
+  candidateAddresses,
   candidateFacts,
   candidateProfiles,
   commonAnswers,
   resumeVersions,
 } from "@/db/schema";
+import { SUGGESTED_MATCH_TERMS } from "@/lib/addressPolicy";
 import { PageHeader, SectionHeading } from "@/components/ui";
 import { requireDashboardUser } from "@/lib/auth";
 import {
@@ -24,17 +27,99 @@ import {
 } from "@/lib/candidateFacts";
 import { formatDate } from "@/lib/format";
 import {
+  deleteCandidateAddress,
   deleteCandidateFact,
+  saveCandidateAddress,
   saveCandidateFact,
   saveCandidateProfile,
   saveCommonAnswer,
 } from "../actions";
 import { resumeHealthLabel } from "@/lib/resumeHealth";
 
+type AddressRow = typeof candidateAddresses.$inferSelect;
+
+/** Shared by the add form and each edit form; label is the upsert key, so it locks on edit. */
+function AddressForm({ address }: { address?: AddressRow }) {
+  const suggested = address ? [] : SUGGESTED_MATCH_TERMS["new york"] ?? [];
+  return (
+    <form action={saveCandidateAddress} className="mt-4 grid gap-4 sm:grid-cols-2">
+      <label className="field">
+        <span>Label</span>
+        <input
+          name="label"
+          required
+          maxLength={60}
+          defaultValue={address?.label ?? ""}
+          readOnly={Boolean(address)}
+          placeholder="New York City"
+        />
+      </label>
+      <label className="field">
+        <span>Nearby terms (comma separated)</span>
+        <input
+          name="matchTerms"
+          defaultValue={(address?.matchTerms ?? suggested).join(", ")}
+          placeholder="new york, nyc, brooklyn, queens"
+        />
+      </label>
+      <label className="field sm:col-span-2">
+        <span>Address line 1</span>
+        <input name="line1" required maxLength={200} defaultValue={address?.line1 ?? ""} />
+      </label>
+      <label className="field sm:col-span-2">
+        <span>Address line 2</span>
+        <input name="line2" maxLength={200} defaultValue={address?.line2 ?? ""} />
+      </label>
+      <label className="field">
+        <span>City</span>
+        <input name="city" required maxLength={100} defaultValue={address?.city ?? ""} />
+      </label>
+      <label className="field">
+        <span>State / region</span>
+        <input
+          name="stateRegion"
+          required
+          maxLength={100}
+          defaultValue={address?.stateRegion ?? "NY"}
+        />
+      </label>
+      <label className="field">
+        <span>Postal code</span>
+        <input
+          name="postalCode"
+          required
+          maxLength={20}
+          defaultValue={address?.postalCode ?? ""}
+        />
+      </label>
+      <label className="field">
+        <span>Country</span>
+        <input
+          name="country"
+          required
+          maxLength={100}
+          defaultValue={address?.country ?? "United States"}
+        />
+      </label>
+      <label className="flex items-center gap-2 sm:col-span-2 text-sm text-[var(--ink)]">
+        <input type="checkbox" name="isPrimary" defaultChecked={address?.isPrimary ?? false} />
+        <span>
+          Use this one for remote postings and anywhere the location doesn&rsquo;t match
+        </span>
+      </label>
+      <div className="sm:col-span-2">
+        <button className="primary-button">
+          <Save className="size-4" /> {address ? "Save address" : "Add address"}
+        </button>
+      </div>
+    </form>
+  );
+}
+
 export default async function ProfilePage() {
   const user = await requireDashboardUser();
   const db = getDb();
-  const [profiles, resumes, answers, facts] = await Promise.all([
+  const [profiles, resumes, answers, facts, addresses] = await Promise.all([
     db
       .select()
       .from(candidateProfiles)
@@ -55,6 +140,11 @@ export default async function ProfilePage() {
       .from(candidateFacts)
       .where(eq(candidateFacts.userId, user.id))
       .orderBy(candidateFacts.factKey),
+    db
+      .select()
+      .from(candidateAddresses)
+      .where(eq(candidateAddresses.userId, user.id))
+      .orderBy(desc(candidateAddresses.isPrimary), candidateAddresses.label),
   ]);
   const profile = profiles[0];
   const factByKey = new Map(facts.map((fact) => [fact.factKey, fact]));
@@ -306,6 +396,66 @@ export default async function ProfilePage() {
           </section>
         </aside>
       </div>
+
+      <section className="panel mt-6 p-5 sm:p-7">
+        <SectionHeading
+          title="Addresses"
+          description="Add each place you can work from. When an application asks for an address, the nearest one to the posting is filled in automatically."
+        />
+        <p className="mb-5 rounded-xl border border-[var(--line)] bg-[var(--soft)] p-3 text-sm text-[var(--muted)]">
+          Matching runs on the posting&rsquo;s location text, so a job in{" "}
+          <span className="font-mono text-xs">New York, NY, US</span> uses your New York
+          address and one in <span className="font-mono text-xs">Albany, NY</span> uses
+          Albany. Nearby terms let a posting in Brooklyn or Schenectady resolve to the right
+          one. Remote postings and anything unrecognised use the address marked primary.
+        </p>
+
+        <div className="space-y-3">
+          {addresses.map((address) => (
+            <details
+              key={address.id}
+              className="rounded-2xl border border-[var(--line)] bg-white/55 p-4"
+            >
+              <summary className="cursor-pointer list-none">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <MapPin className="size-4 text-[var(--accent-dark)]" />
+                    <span className="font-semibold text-[var(--ink)]">{address.label}</span>
+                    {address.isPrimary && <span className="source-chip">Primary</span>}
+                  </div>
+                  <span className="text-xs text-[var(--muted)]">
+                    {[address.city, address.stateRegion, address.postalCode]
+                      .filter(Boolean)
+                      .join(", ")}
+                  </span>
+                </div>
+              </summary>
+              <AddressForm address={address} />
+              <form action={deleteCandidateAddress} className="mt-3">
+                <input type="hidden" name="addressId" value={address.id} />
+                <button className="inline-flex items-center gap-1.5 text-xs text-[var(--muted)] hover:text-[var(--ink)]">
+                  <Trash2 className="size-3.5" /> Remove this address
+                </button>
+              </form>
+            </details>
+          ))}
+
+          {!addresses.length && (
+            <div className="empty-state">
+              <MapPin className="mx-auto size-6 text-[var(--muted)]" />
+              <p className="mt-3 text-sm text-[var(--muted)]">
+                No addresses yet. Add one below — applications fall back to the single
+                address on your profile until you do.
+              </p>
+            </div>
+          )}
+        </div>
+
+        <div className="mt-5 rounded-2xl bg-[var(--soft)] p-5">
+          <p className="mb-4 font-semibold text-[var(--ink)]">Add an address</p>
+          <AddressForm />
+        </div>
+      </section>
 
       <section className="panel mt-6 p-5 sm:p-7">
         <SectionHeading

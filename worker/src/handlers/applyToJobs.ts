@@ -122,6 +122,8 @@ export async function handleApplyToJobs(
             source: job.source,
             sourceUrl: job.sourceUrl,
             status: job.status,
+            location: job.location,
+            remoteType: job.remoteType,
           },
           mode,
           page,

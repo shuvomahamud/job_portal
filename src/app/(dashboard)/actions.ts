@@ -7,6 +7,7 @@ import { getDb } from "@/db";
 import {
   applications,
   automationSettings,
+  candidateAddresses,
   candidateFacts,
   candidateProfiles,
   commandEvents,
@@ -155,6 +156,81 @@ export async function saveCommonAnswer(formData: FormData) {
         updatedAt: new Date(),
       },
     });
+  revalidatePath("/profile");
+}
+
+/**
+ * Saves one of the addresses the candidate can apply from. Marking an address primary
+ * clears the flag on the others, since exactly one is the fallback for postings with no
+ * usable location.
+ */
+export async function saveCandidateAddress(formData: FormData) {
+  const user = await requireDashboardUser();
+  const input = z
+    .object({
+      label: z.string().trim().min(1).max(60),
+      line1: z.string().trim().min(1).max(200),
+      line2: z.string().trim().max(200).nullable(),
+      city: z.string().trim().min(1).max(100),
+      stateRegion: z.string().trim().min(1).max(100),
+      postalCode: z.string().trim().min(1).max(20),
+      country: z.string().trim().min(1).max(100),
+      isPrimary: z.boolean(),
+      matchTerms: z.array(z.string().trim().min(1).max(60)).max(40),
+    })
+    .parse({
+      label: requiredString(formData, "label"),
+      line1: requiredString(formData, "line1"),
+      line2: optionalString(formData, "line2"),
+      city: requiredString(formData, "city"),
+      stateRegion: requiredString(formData, "stateRegion"),
+      postalCode: requiredString(formData, "postalCode"),
+      country: requiredString(formData, "country") || "United States",
+      isPrimary: formData.get("isPrimary") === "on",
+      matchTerms: commaList(formData, "matchTerms").map((term) => term.toLowerCase()),
+    });
+
+  const db = getDb();
+  await db
+    .insert(candidateAddresses)
+    .values({ userId: user.id, ...input, line2: input.line2 })
+    .onConflictDoUpdate({
+      target: [candidateAddresses.userId, candidateAddresses.label],
+      set: {
+        line1: input.line1,
+        line2: input.line2,
+        city: input.city,
+        stateRegion: input.stateRegion,
+        postalCode: input.postalCode,
+        country: input.country,
+        isPrimary: input.isPrimary,
+        matchTerms: input.matchTerms,
+        updatedAt: new Date(),
+      },
+    });
+
+  if (input.isPrimary) {
+    await db
+      .update(candidateAddresses)
+      .set({ isPrimary: false, updatedAt: new Date() })
+      .where(
+        and(
+          eq(candidateAddresses.userId, user.id),
+          sql`${candidateAddresses.label} <> ${input.label}`,
+        ),
+      );
+  }
+  revalidatePath("/profile");
+}
+
+export async function deleteCandidateAddress(formData: FormData) {
+  const user = await requireDashboardUser();
+  const addressId = z.uuid().parse(requiredString(formData, "addressId"));
+  await getDb()
+    .delete(candidateAddresses)
+    .where(
+      and(eq(candidateAddresses.id, addressId), eq(candidateAddresses.userId, user.id)),
+    );
   revalidatePath("/profile");
 }
 

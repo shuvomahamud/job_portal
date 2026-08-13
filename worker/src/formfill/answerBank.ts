@@ -3,6 +3,11 @@ import type { NeonHttpDatabase } from "drizzle-orm/neon-http";
 import * as schema from "../../../src/db/schema";
 import { getWorkerDb } from "../db";
 import { factIsUsable, factLabel, isFactKey } from "../../../src/lib/candidateFacts";
+import {
+  pickAddressForJob,
+  type AddressLike,
+  type JobLocationInput,
+} from "../../../src/lib/addressPolicy";
 import { normalizeQuestion } from "./questionNormalizer";
 import { getRiskLevel } from "./riskPolicy";
 import { FIELD_CATEGORIES, type DetectedField, type FieldCategory, type SavedAnswer } from "./types";
@@ -204,6 +209,39 @@ export function profileToSavedAnswers(profile: AnswerBankProfile): SavedAnswer[]
   ].filter((entry): entry is SavedAnswer => entry !== null);
 }
 
+export type CandidateAddressRow = AddressLike & {
+  line1: string;
+  line2: string | null;
+  postalCode: string;
+  country: string;
+};
+
+/**
+ * Address entries for whichever address is nearest the posting. Uses the same
+ * `profile:` id prefix as the other identity fields so applyPolicy treats them
+ * identically — this is a location-aware source for the same categories, not a new
+ * kind of answer.
+ */
+export function addressToSavedAnswers(
+  addresses: CandidateAddressRow[],
+  job: JobLocationInput,
+): { answers: SavedAnswer[]; reason: string | null; label: string | null } {
+  const choice = pickAddressForJob(addresses, job);
+  if (!choice) return { answers: [], reason: null, label: null };
+
+  const address = choice.address;
+  const street = [address.line1, address.line2].filter(Boolean).join(", ");
+  const answers = [
+    profileEntry("address", "Address", street),
+    profileEntry("city", "City", address.city),
+    profileEntry("state", "State", address.stateRegion),
+    profileEntry("zip", "ZIP / postal code", address.postalCode),
+    profileEntry("country", "Country", address.country),
+  ].filter((entry): entry is SavedAnswer => entry !== null);
+
+  return { answers, reason: choice.reason, label: address.label };
+}
+
 export function commonAnswerToSavedAnswer(row: CommonAnswerRow): SavedAnswer {
   const category = (FIELD_CATEGORY_SET.has(row.questionKey)
     ? row.questionKey
@@ -250,13 +288,31 @@ export async function loadAnswerBank(
     jobId: string;
     company: string;
     domain: string;
+    /** Posting location, used to choose the nearest address on file. */
+    jobLocation?: string | null;
+    remoteType?: string | null;
   },
   database?: AnswerDb,
 ): Promise<SavedAnswer[]> {
+  return (await loadAnswerBankWithContext(input, database)).answers;
+}
+
+/** Same as loadAnswerBank, plus why a given address was chosen (for logs and artifacts). */
+export async function loadAnswerBankWithContext(
+  input: {
+    userId: string;
+    jobId: string;
+    company: string;
+    domain: string;
+    jobLocation?: string | null;
+    remoteType?: string | null;
+  },
+  database?: AnswerDb,
+): Promise<{ answers: SavedAnswer[]; addressLabel: string | null; addressReason: string | null }> {
   const db = dbOrDefault(database);
   const companyKey = input.company.trim().toLowerCase();
 
-  const [answerRows, commonRows, factRows, profile, user] = await Promise.all([
+  const [answerRows, commonRows, factRows, addressRows, profile, user] = await Promise.all([
     db
       .select()
       .from(schema.applicationAnswers)
@@ -269,6 +325,10 @@ export async function loadAnswerBank(
       .select()
       .from(schema.candidateFacts)
       .where(eq(schema.candidateFacts.userId, input.userId)),
+    db
+      .select()
+      .from(schema.candidateAddresses)
+      .where(eq(schema.candidateAddresses.userId, input.userId)),
     db
       .select()
       .from(schema.candidateProfiles)
@@ -293,22 +353,36 @@ export async function loadAnswerBank(
     .filter((row) => row.scope === "global")
     .map(rowToSavedAnswer);
 
+  const address = addressToSavedAnswers(addressRows, {
+    location: input.jobLocation,
+    remoteType: input.remoteType,
+  });
+  const addressCategories = new Set(address.answers.map((answer) => answer.category));
+
   const profileAnswers = profileToSavedAnswers({
     ...(profile ?? {}),
     email: user?.email ?? null,
-  }).filter((answer) => IDENTITY_CATEGORIES.has(answer.category));
+  })
+    .filter((answer) => IDENTITY_CATEGORIES.has(answer.category))
+    // A chosen address wins over the profile's single legacy address. When no addresses
+    // are on file the profile still supplies them, so nothing regresses.
+    .filter((answer) => !addressCategories.has(answer.category));
 
   const commonMapped = commonRows.map(commonAnswerToSavedAnswer);
   const factAnswers = factsToSavedAnswers(factRows);
 
-  return assembleAnswerBank({
-    jobAnswers,
-    companyAnswers,
-    profileAnswers,
-    globalAnswers,
-    factAnswers,
-    commonAnswers: commonMapped,
-  });
+  return {
+    answers: assembleAnswerBank({
+      jobAnswers,
+      companyAnswers,
+      profileAnswers: [...address.answers, ...profileAnswers],
+      globalAnswers,
+      factAnswers,
+      commonAnswers: commonMapped,
+    }),
+    addressLabel: address.label,
+    addressReason: address.reason,
+  };
 }
 
 export async function learnAnswer(

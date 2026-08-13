@@ -4,7 +4,7 @@ import * as schema from "../../../src/db/schema";
 import type { BrowserContextLike, PageLike } from "../browser/playwrightTypes";
 import { getConfig, sleep } from "../config";
 import { addCommandEvent, getCommandStatus, getWorkerDb } from "../db";
-import { loadAnswerBank, markAnswersUsed } from "../formfill/answerBank";
+import { loadAnswerBankWithContext, markAnswersUsed } from "../formfill/answerBank";
 import {
   detectFields,
   expandComboboxOptions,
@@ -90,6 +90,9 @@ export type ApplyJobInput = {
     source: string;
     sourceUrl: string;
     status: string;
+    /** Drives which address on file gets filled in. */
+    location?: string | null;
+    remoteType?: string | null;
   };
   mode?: ApplyMode;
   page: PageLike;
@@ -447,7 +450,7 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
       resumeVersionId,
     });
 
-    const answers = await loadAnswerBank({
+    const bank = await loadAnswerBankWithContext({
       userId: input.userId,
       jobId: input.job.id,
       company: input.job.company,
@@ -458,7 +461,22 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
           return "";
         }
       })(),
+      jobLocation: input.job.location,
+      remoteType: input.job.remoteType,
     });
+    const answers = bank.answers;
+    if (bank.addressLabel) {
+      await addCommandEvent(
+        input.commandId,
+        "apply_address_selected",
+        `Applying with the "${bank.addressLabel}" address. ${bank.addressReason ?? ""}`.trim(),
+        {
+          jobId: input.job.id,
+          addressLabel: bank.addressLabel,
+          jobLocation: input.job.location ?? null,
+        },
+      );
+    }
 
     const human = createHumanTyping(random);
     const plan: Array<Record<string, unknown>> = [];
