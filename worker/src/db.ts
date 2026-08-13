@@ -173,6 +173,52 @@ export async function getCommandStatus(commandId: string) {
   return row?.status ?? null;
 }
 
+/**
+ * Put the exact command that raised a browser-intervention alert back on the queue.
+ * Reusing its id is important: apply-cycle dependency commands already point at that
+ * id, so cloning it would leave the original run permanently attached to a failure.
+ */
+export async function resumeCommandAfterBrowserIntervention(commandId: string, userId: string) {
+  const database = getWorkerDb();
+  const [command] = await database
+    .update(schema.commands)
+    .set({
+      status: "pending",
+      priority: "high",
+      scheduledFor: new Date(),
+      claimedBy: null,
+      claimedAt: null,
+      heartbeatAt: null,
+      completedAt: null,
+      resultJson: null,
+      errorMessage: null,
+      updatedAt: new Date(),
+    })
+    .where(
+      and(
+        eq(schema.commands.id, commandId),
+        eq(schema.commands.requestedBy, userId),
+        inArray(schema.commands.status, ["failed", "completed"]),
+        inArray(schema.commands.type, [
+          "find_matching_jobs",
+          "discover_jobs_browser",
+          "apply_to_jobs",
+          "verify_submission",
+        ]),
+      ),
+    )
+    .returning({ id: schema.commands.id, type: schema.commands.type });
+  if (!command) return null;
+
+  await database.insert(schema.commandEvents).values({
+    commandId: command.id,
+    eventType: "resumed_after_browser_intervention",
+    message: "Human verification was durably confirmed; the blocked command was queued to resume.",
+    metadataJson: { requestedBy: userId },
+  });
+  return command;
+}
+
 export async function recoverStaleClaims(maxClaimAgeMinutes = 60) {
   const database = getWorkerDb();
   const result = await database.execute(sql`

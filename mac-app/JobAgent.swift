@@ -306,7 +306,7 @@ final class ConfigStore {
             Key.dashboardURL: "http://localhost:3000",
             Key.commandTypes: allCommandTypes.joined(separator: ","),
             Key.browserProfile: "\(home)/.job-worker-browser-profile",
-            Key.browserHeadless: "true",
+            Key.browserHeadless: "false",
             // Installed Chrome passes bot checks that reject Playwright's bundled Chromium.
             Key.browserChannel: "chrome",
             Key.browserDiscovery: "true",
@@ -1095,7 +1095,10 @@ final class MainWindowController: NSWindowController, NSTextFieldDelegate, NSTex
         profileRow.spacing = 6
         form.addArrangedSubview(formRow("Profile folder", profileRow,
                                         hint: "Where job site logins are stored"))
-        form.addArrangedSubview(formRow("Run hidden", switchRow(headlessSwitch, "Hide the browser window while working")))
+        form.addArrangedSubview(formRow(
+            "Run hidden (not recommended)",
+            switchRow(headlessSwitch, "Hide Chrome while working; this can trigger more verification challenges")
+        ))
         form.addArrangedSubview(formRow("Browser discovery", switchRow(discoverySwitch, "Let the agent find jobs by browsing")))
         browserEnginePopup.addItems(withTitles: ["Google Chrome (recommended)", "Bundled Chromium"])
         browserEnginePopup.target = self

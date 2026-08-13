@@ -6,6 +6,7 @@ import {
   addCommandEvent,
   getAutomationAlertForUser,
   getCommandStatus,
+  resumeCommandAfterBrowserIntervention,
   resolveAutomationAlerts,
 } from "../db";
 import { requireCommandUserId } from "../requireCommandUserId";
@@ -25,6 +26,40 @@ const LOGIN_URLS = {
 } as const;
 
 const MAX_INTERACTIVE_MINUTES = 30;
+const CLEAN_CHECKS_BEFORE_RELOAD = 3;
+const CLEAN_CHECKS_AFTER_RELOAD = 5;
+
+export type AccessVerificationState = {
+  phase: "before_reload" | "after_reload";
+  cleanChecks: number;
+};
+
+export function advanceAccessVerification(
+  state: AccessVerificationState,
+  accessIsClear: boolean,
+): { state: AccessVerificationState; action: "wait" | "reload" | "verified" } {
+  if (!accessIsClear) {
+    return {
+      state: { phase: "before_reload", cleanChecks: 0 },
+      action: "wait",
+    };
+  }
+
+  const cleanChecks = state.cleanChecks + 1;
+  if (state.phase === "before_reload" && cleanChecks >= CLEAN_CHECKS_BEFORE_RELOAD) {
+    return {
+      state: { phase: "after_reload", cleanChecks: 0 },
+      action: "reload",
+    };
+  }
+  if (state.phase === "after_reload" && cleanChecks >= CLEAN_CHECKS_AFTER_RELOAD) {
+    return {
+      state: { phase: "after_reload", cleanChecks },
+      action: "verified",
+    };
+  }
+  return { state: { ...state, cleanChecks }, action: "wait" };
+}
 
 export async function handleOpenBrowserLogin(
   payload: unknown,
@@ -39,6 +74,9 @@ export async function handleOpenBrowserLogin(
     ? await getAutomationAlertForUser(input.alertId, userId)
     : null;
   const cleared = new Set<string>();
+  const verification = new Map<string, AccessVerificationState>(
+    input.sites.map((site) => [site, { phase: "before_reload", cleanChecks: 0 }]),
+  );
   const deadline = Date.now() + MAX_INTERACTIVE_MINUTES * 60_000;
 
   try {
@@ -67,24 +105,66 @@ export async function handleOpenBrowserLogin(
 
       for (const site of input.sites) {
         const page = pages.find((candidate) => candidate.url().includes(site));
-        if (!page) continue;
+        if (!page) {
+          cleared.delete(site);
+          verification.set(site, { phase: "before_reload", cleanChecks: 0 });
+          continue;
+        }
         const blocker = await detectBrowserBlocker(page, site);
-        if (!blocker && !isLoginUrl(page.url())) cleared.add(site);
+        const step = advanceAccessVerification(
+          verification.get(site) ?? { phase: "before_reload", cleanChecks: 0 },
+          !blocker && !isLoginUrl(page.url()),
+        );
+        verification.set(site, step.state);
+
+        if (step.action === "reload") {
+          cleared.delete(site);
+          const verificationUrl = alert?.site === site && alert.pageUrl
+            ? alert.pageUrl
+            : page.url();
+          await addCommandEvent(
+            context.command.id,
+            "interactive_browser_verification_reload",
+            `The challenge disappeared for ${site}; reloading the target page to confirm the clearance persists.`,
+            { site, verificationUrl },
+          );
+          const reloadSucceeded = await page.goto(verificationUrl, {
+            waitUntil: "domcontentloaded",
+            timeout: cfg.JOB_BROWSER_NAVIGATION_TIMEOUT_MS,
+          }).then(() => true).catch(() => false);
+          if (!reloadSucceeded) {
+            verification.set(site, { phase: "before_reload", cleanChecks: 0 });
+          }
+          continue;
+        }
+
+        if (step.action === "verified") cleared.add(site);
+        else cleared.delete(site);
       }
 
       if (input.sites.every((site) => cleared.has(site))) {
         const resolved = await resolveAutomationAlerts(userId, input.sites);
+        const resumed = alert?.commandId
+          ? await resumeCommandAfterBrowserIntervention(alert.commandId, userId)
+          : null;
         await addCommandEvent(
           context.command.id,
           "interactive_browser_unblocked",
-          `Verified access for ${input.sites.join(", ")}; the worker profile is ready.`,
-          { sites: input.sites, resolvedAlertIds: resolved.map((row) => row.id) },
+          `Verified durable access for ${input.sites.join(", ")}; the worker profile is ready.`,
+          {
+            sites: input.sites,
+            resolvedAlertIds: resolved.map((row) => row.id),
+            resumedCommandId: resumed?.id ?? null,
+          },
         );
         return {
           sites: input.sites,
           verified: true,
           resolvedAlerts: resolved.length,
-          message: "Login or verification completed. You can run the apply cycle again.",
+          resumedCommandId: resumed?.id ?? null,
+          message: resumed
+            ? "Verification persisted after reload. The blocked work was queued to resume automatically."
+            : "Verification persisted after reload. The worker browser profile is ready.",
         };
       }
       await sleep(2_000);
