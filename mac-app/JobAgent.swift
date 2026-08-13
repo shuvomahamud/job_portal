@@ -30,6 +30,8 @@ enum Key {
     static let browserHeadless = "JOB_BROWSER_HEADLESS"
     static let browserDiscovery = "JOB_BROWSER_DISCOVERY_ENABLED"
     static let browserChannel = "JOB_BROWSER_CHANNEL"
+    static let browserCDPURL = "JOB_BROWSER_CDP_URL"
+    static let browserCDPManagePages = "JOB_BROWSER_CDP_MANAGE_PAGES"
 
     static let ollamaURL = "OLLAMA_BASE_URL"
     static let ollamaModel = "OLLAMA_MODEL"
@@ -291,6 +293,15 @@ final class ConfigStore {
         if values[Key.browserChannel] == nil {
             values[Key.browserChannel] = "chrome"
         }
+        // The stable Mac topology launches a normal dedicated Chrome process and lets
+        // Playwright attach over a loopback-only debugging port. This avoids Playwright's
+        // automation-heavy browser launch flags, which Indeed rejects after a challenge.
+        if values[Key.browserCDPURL] == nil {
+            values[Key.browserCDPURL] = "http://127.0.0.1:9222"
+        }
+        if values[Key.browserCDPManagePages] == nil {
+            values[Key.browserCDPManagePages] = "true"
+        }
         if let configured = values[Key.commandTypes] {
             var commands = configured.split(separator: ",").map(String.init)
             if !commands.contains("open_browser_login") {
@@ -316,6 +327,8 @@ final class ConfigStore {
             Key.browserHeadless: "false",
             // Installed Chrome passes bot checks that reject Playwright's bundled Chromium.
             Key.browserChannel: "chrome",
+            Key.browserCDPURL: "http://127.0.0.1:9222",
+            Key.browserCDPManagePages: "true",
             Key.browserDiscovery: "true",
             Key.ollamaURL: "http://127.0.0.1:11434",
             Key.ollamaModel: "qwen3.5:9b",
@@ -442,6 +455,7 @@ final class WorkerController {
     static let shared = WorkerController()
 
     private var process: Process?
+    private var managedBrowserProcess: Process?
     private var logHandle: FileHandle?
     private(set) var state: WorkerState = .stopped
 
@@ -463,6 +477,75 @@ final class WorkerController {
         let stamped = "[\(ISO8601DateFormatter().string(from: Date()))] \(line)\n"
         guard let data = stamped.data(using: .utf8) else { return }
         logHandle?.write(data)
+    }
+
+    private func cdpIsReachable(_ endpoint: URL) -> Bool {
+        let versionURL = endpoint.appendingPathComponent("json/version")
+        var request = URLRequest(url: versionURL)
+        request.timeoutInterval = 0.75
+        let semaphore = DispatchSemaphore(value: 0)
+        var reachable = false
+        URLSession.shared.dataTask(with: request) { _, response, _ in
+            if let http = response as? HTTPURLResponse {
+                reachable = (200..<300).contains(http.statusCode)
+            }
+            semaphore.signal()
+        }.resume()
+        _ = semaphore.wait(timeout: .now() + 1)
+        return reachable
+    }
+
+    /// Starts a dedicated, ordinary Chrome instance for the worker and exposes CDP only
+    /// on loopback. Playwright attaches later; it does not launch Chrome or add its long
+    /// list of automation flags. The browser intentionally stays open across commands so
+    /// job-site cookies, challenges, and login state keep one stable browser identity.
+    private func ensureManagedBrowser() throws {
+        let rawEndpoint = ConfigStore.shared.get(Key.browserCDPURL)
+        guard !rawEndpoint.isEmpty else { return }
+        guard let endpoint = URL(string: rawEndpoint),
+              endpoint.scheme == "http",
+              ["127.0.0.1", "localhost", "::1"].contains(endpoint.host ?? ""),
+              let port = endpoint.port else {
+            throw ServiceError(message: "Browser CDP URL must be a loopback HTTP URL with a port.")
+        }
+        if cdpIsReachable(endpoint) {
+            appendLog("reusing dedicated Chrome on (rawEndpoint)")
+            return
+        }
+
+        let chromePath = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+        guard FileManager.default.fileExists(atPath: chromePath) else {
+            throw ServiceError(message: "Google Chrome is required at /Applications/Google Chrome.app")
+        }
+        let profile = ConfigStore.shared.get(Key.browserProfile)
+        guard !profile.isEmpty else {
+            throw ServiceError(message: "Browser profile folder is required.")
+        }
+
+        let chrome = Process()
+        chrome.executableURL = URL(fileURLWithPath: chromePath)
+        chrome.arguments = [
+            "--remote-debugging-address=127.0.0.1",
+            "--remote-debugging-port=\(port)",
+            "--user-data-dir=\(profile)",
+            "--no-first-run",
+            "--no-default-browser-check",
+            "about:blank",
+        ]
+        chrome.standardOutput = FileHandle.nullDevice
+        chrome.standardError = FileHandle.nullDevice
+        try chrome.run()
+        managedBrowserProcess = chrome
+
+        let deadline = Date().addingTimeInterval(10)
+        while Date() < deadline {
+            if cdpIsReachable(endpoint) {
+                appendLog("started ordinary dedicated Chrome on (rawEndpoint)")
+                return
+            }
+            Thread.sleep(forTimeInterval: 0.2)
+        }
+        throw ServiceError(message: "Dedicated Chrome started, but its local debugging endpoint did not become ready.")
     }
 
     func start() {
@@ -489,6 +572,17 @@ final class WorkerController {
         logHandle = try? FileHandle(forWritingTo: logURL)
         logHandle?.seekToEndOfFile()
         appendLog("--- starting worker ---")
+
+        do {
+            try ensureManagedBrowser()
+        } catch {
+            appendLog("failed to launch dedicated Chrome: \(error.localizedDescription)")
+            notify(title: "Could not start browser", body: error.localizedDescription)
+            try? logHandle?.close()
+            logHandle = nil
+            setState(.stopped)
+            return
+        }
 
         let task = Process()
         task.executableURL = URL(fileURLWithPath: nodeBin)

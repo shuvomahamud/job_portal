@@ -17,6 +17,15 @@ async function main() {
       keepAlive: cfg.OLLAMA_KEEP_ALIVE,
     });
   }
+  if (cfg.JOB_BROWSER_CDP_URL) {
+    const versionUrl = new URL("/json/version", cfg.JOB_BROWSER_CDP_URL);
+    const response = await fetch(versionUrl, {
+      signal: AbortSignal.timeout(cfg.JOB_BROWSER_CDP_CONNECT_TIMEOUT_MS),
+    });
+    if (!response.ok) {
+      throw new Error(`Dedicated Chrome CDP health check failed with HTTP ${response.status}.`);
+    }
+  }
   console.log(JSON.stringify({
     ok: true,
     workerId: cfg.WORKER_ID,
@@ -25,6 +34,8 @@ async function main() {
     commandTypes,
     browserChannel: cfg.JOB_BROWSER_CHANNEL ?? "bundled",
     browserHeadless: cfg.JOB_BROWSER_HEADLESS,
+    browserConnection: cfg.JOB_BROWSER_CDP_URL ? "attached_cdp" : "playwright_launched",
+    browserCdpUrl: cfg.JOB_BROWSER_CDP_URL ?? null,
     ollamaModel: commandTypes.includes("run_local_llm_extraction") ? cfg.OLLAMA_MODEL : null,
   }, null, 2));
 }
