@@ -50,10 +50,9 @@ export async function handleApplyToJobs(
     };
   }
   const mode = effectiveMode(input.mode, cfg.JOB_APPLY_MODE);
-  const runLimit = Math.min(
-    input.maxJobs ?? cfg.JOB_APPLY_MAX_PER_RUN,
-    cfg.JOB_APPLY_MAX_PER_RUN,
-  );
+  // The caller's number wins; the configured value is the default for callers that
+  // omit one. The cycle already applied the user's per-run choice when picking jobIds.
+  const runLimit = input.maxJobs ?? cfg.JOB_APPLY_MAX_PER_RUN;
   const maxJobs = Math.min(
     runLimit,
     input.jobIds.length,

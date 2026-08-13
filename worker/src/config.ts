@@ -38,7 +38,10 @@ const envSchema = z.object({
   JOB_BROWSER_MAX_DELAY_MS: intFromEnv(45000, 5000, 180000),
   JOB_BROWSER_SLOW_MO_MS: intFromEnv(500, 0, 5000),
   JOB_BROWSER_NAVIGATION_TIMEOUT_MS: intFromEnv(60000, 10000, 180000),
-  JOB_BROWSER_MAX_RESULTS_PER_COMMAND: intFromEnv(25, 1, 100),
+  // Ceiling for one discovery command. Kept high enough not to strangle a large apply
+  // run: the cycle asks for roughly twice its apply target, and a 25 cap silently
+  // reduced a 50-application request to 25 postings found.
+  JOB_BROWSER_MAX_RESULTS_PER_COMMAND: intFromEnv(100, 1, 100),
   JOB_BROWSER_MAX_PAGES_PER_SEARCH: intFromEnv(1, 1, 5),
   // "chrome" uses the installed Google Chrome binary instead of Playwright's bundled
   // Chromium. Still a separate profile directory, so the personal Chrome profile is untouched.

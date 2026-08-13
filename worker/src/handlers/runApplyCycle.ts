@@ -54,13 +54,13 @@ export async function handleRunApplyCycle(
       };
     }
 
-    const requestedJobs = Math.min(
-      input.maxJobs ?? cfg.JOB_APPLY_MAX_PER_RUN,
-      cfg.JOB_APPLY_MAX_PER_RUN,
-    );
+    // The per-run choice is authoritative; the configured value is only the default for
+    // a run that did not specify one. Clamping to it made the number chosen on the
+    // dashboard a lie — asking for 50 silently became 20.
+    const requestedJobs = input.maxJobs ?? cfg.JOB_APPLY_MAX_PER_RUN;
     // Discovery has to out-run the target: most postings are scored uncertain or reject,
     // so finding exactly N would leave far fewer than N eligible to apply to.
-    const maxResults = Math.min(50, Math.max(10, requestedJobs * 2));
+    const maxResults = Math.min(100, Math.max(10, requestedJobs * 2));
 
     const matchingCommandIds: string[] = [];
     for (const role of roles) {
@@ -160,10 +160,8 @@ export async function handleRunApplyCycle(
     }
   }
 
-  const maxApplicationsPerRun = Math.min(
-    input.maxJobs ?? cfg.JOB_APPLY_MAX_PER_RUN,
-    cfg.JOB_APPLY_MAX_PER_RUN,
-  );
+  // Same rule as the discover phase: the run's own number wins, the config is the default.
+  const maxApplicationsPerRun = input.maxJobs ?? cfg.JOB_APPLY_MAX_PER_RUN;
 
   const selectedSources = input.sources ?? [...ALL_SOURCES];
 
