@@ -675,6 +675,8 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
     const plan: Array<Record<string, unknown>> = [];
     let previousFingerprint = "";
     let stallRetries = 0;
+    /** Set after clicking to advance, so an unchanged page next round means the form refused. */
+    let clickedWithoutProgress = false;
 
     for (let step = 0; step < cfg.JOB_APPLY_MAX_STEPS; step += 1) {
       if (await isApplyPaused(input.userId)) {
@@ -756,6 +758,41 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
       let llmCalls = enhanced.calls;
 
       const fingerprint = fieldFingerprint(fields, frame.url());
+
+      // The page is exactly as it was after we clicked to advance, which means the form
+      // refused and said nothing about it. Indeed does this on its screening-questions
+      // step: required radio groups with hashed names like q_ba7addb345ecad, no error
+      // shown, no navigation, Continue simply inert.
+      //
+      // Retrying was pointless and hid the cause. It clicked Continue for every remaining
+      // step and then reported "max_steps", which reads like a timeout and says nothing
+      // about the four unanswered questions that were the actual problem.
+      if (clickedWithoutProgress && fingerprint === previousFingerprint) {
+        const unanswered = fields.filter(
+          (field) => field.required && !String(field.currentValue ?? "").trim(),
+        );
+        const detail = unanswered.length
+          ? `The form would not advance. ${unanswered.length} required field(s) are unanswered: ${unanswered
+              .map((field) => field.labelText || field.name || field.fieldCategory)
+              .filter(Boolean)
+              .slice(0, 5)
+              .join("; ")}`
+          : "The form would not advance and no unanswered required field was visible.";
+        await upsertApplication({
+          userId: input.userId,
+          jobId: input.job.id,
+          status: "needs_manual",
+          stopReason: detail,
+        });
+        await addCommandEvent(input.commandId, "apply_form_refused", detail, {
+          jobId: input.job.id,
+          url: frame.url(),
+          unanswered: unanswered.map((field) => field.labelText || field.name),
+        });
+        await finishTrace(artifactCtx, true);
+        return { stopReason: "stalled", applicationId: application.id, artifacts: artifactCtx.paths };
+      }
+
       const asks: Array<{ field: DetectedField; reason: string }> = [];
       const usedAnswerIds: string[] = [];
 
@@ -1117,6 +1154,7 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
         stallRetries = 0;
       }
       previousFingerprint = fingerprint;
+      clickedWithoutProgress = true;
       await advance.locator.click({ timeout: 5000 });
       await sleep(humanDelayMs({ minDelayMs: 1000, maxDelayMs: 2500 }, random));
     }
