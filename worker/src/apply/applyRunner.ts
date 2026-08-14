@@ -36,6 +36,7 @@ import {
   isApplyPaused,
 } from "./applyEligibility";
 import { adapterFor, isExternalAts, sourceUrlAllowed } from "./applySteps";
+import { decideExternalSiteApply } from "./externalSitePolicy";
 import { fillDetectedField } from "./fillField";
 import {
   createHumanTyping,
@@ -349,6 +350,7 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
       targetRoleId: schema.jobRoleMatches.targetRoleId,
       resumeVersionId: schema.jobRoleMatches.resumeVersionId,
       score: schema.jobRoleMatches.score,
+      status: schema.jobRoleMatches.status,
     })
     .from(schema.jobRoleMatches)
     .innerJoin(schema.targetRoles, eq(schema.targetRoles.id, schema.jobRoleMatches.targetRoleId))
@@ -517,16 +519,36 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
     artifactCtx.page = activePage;
     const applyUrl = activePage.url();
     const external = isExternalAts(applyUrl, adapter.allowedApplyHosts);
+    let onExternalSite = false;
     if (external.external && input.job.source !== "fixture") {
-      await upsertApplication({
-        userId: input.userId,
-        jobId: input.job.id,
-        status: "needs_manual",
-        stopReason: `External ATS host: ${external.host}`,
-        applyUrl,
+      const decision = decideExternalSiteApply({
+        host: external.host,
+        enabled: cfg.JOB_APPLY_EXTERNAL_SITES_ENABLED,
+        minScore: cfg.JOB_APPLY_EXTERNAL_MIN_SCORE,
+        score: match?.score ?? null,
+        status: match?.status ?? null,
       });
-      await finishTrace(artifactCtx, true);
-      return { stopReason: "external_ats", applicationId: application.id, artifacts: artifactCtx.paths };
+      if (!decision.allowed) {
+        await upsertApplication({
+          userId: input.userId,
+          jobId: input.job.id,
+          status: "needs_manual",
+          stopReason: decision.reason,
+          applyUrl,
+        });
+        await finishTrace(artifactCtx, true);
+        return { stopReason: "external_ats", applicationId: application.id, artifacts: artifactCtx.paths };
+      }
+      // Past here the run is on an employer's own site. The field detector, answer bank
+      // and risk policy are all site-agnostic already, so filling proceeds unchanged; what
+      // differs is that nothing about this page has been rehearsed.
+      onExternalSite = true;
+      await addCommandEvent(
+        input.commandId,
+        "external_site_apply_started",
+        `Following the posting to ${external.host} to apply on the employer's own site.`,
+        { jobId: input.job.id, host: external.host, applyUrl, score: match?.score ?? null },
+      );
     }
 
     await upsertApplication({

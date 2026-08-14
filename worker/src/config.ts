@@ -85,6 +85,14 @@ const envSchema = z.object({
   REMOTE_AI_REVIEW_MAX_PER_RUN: intFromEnv(5, 0, 50),
   // "desktop" also raises a native notification through the JobAgent app.
   JOB_APPLY_NOTIFY_CHANNEL: z.enum(["desktop", "dashboard"]).default("desktop"),
+  // Push notifications reach a phone and, through it, an Apple Watch — a macOS
+  // notification never leaves the Mac. Additive: the desktop notification still fires.
+  JOB_APPLY_PUSH_ENABLED: boolFromEnv(false),
+  NTFY_SERVER: z.string().url().default("https://ntfy.sh"),
+  // Anyone who knows a topic on the public server can read it, and these carry job titles
+  // and company names. Use something long and unguessable.
+  NTFY_TOPIC: z.string().trim().min(8).max(120).optional(),
+  NTFY_TIMEOUT_MS: intFromEnv(10000, 1000, 60000),
   JOB_APPLY_QUESTION_TTL_HOURS: intFromEnv(72, 1, 720),
   JOB_APPLY_ENABLED: boolFromEnv(false),
   JOB_APPLY_MODE: z.enum(["dry_run", "fill_only", "fill_and_submit"]).default("dry_run"),
@@ -96,6 +104,13 @@ const envSchema = z.object({
   JOB_APPLY_ARTIFACT_DIR: z.string().optional(),
   JOB_APPLY_TRACE: boolFromEnv(true),
   JOB_APPLY_TRUST_LLM_ANSWERS: boolFromEnv(false),
+  // Follow a posting off the job board and apply on the employer's own site. Off by
+  // default: an off-board apply may create an account with that employer and submits a
+  // form nobody has rehearsed, so it is opt-in per machine.
+  JOB_APPLY_EXTERNAL_SITES_ENABLED: boolFromEnv(false),
+  // Minimum match score for an off-board apply, inclusive. Far above the on-board bar
+  // because the cost of a bad one is an account and an irreversible submission.
+  JOB_APPLY_EXTERNAL_MIN_SCORE: intFromEnv(80, 0, 100),
   WORKER_OWNER_USER_ID: z.string().uuid().optional(),
 });
 
