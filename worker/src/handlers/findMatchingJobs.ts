@@ -8,6 +8,7 @@ import { evaluateProfileHardFilter } from "../ai/hardFilter";
 import {
   addCommandEvent,
   createWorkerChildCommand,
+  queueScoringSweepIfIdle,
   getActiveTargetRolesForUser,
   getCandidateFactsForUser,
   getCandidateProfileForUser,
@@ -127,6 +128,29 @@ export async function handleFindMatchingJobs(payload: unknown, context: HandlerC
         initialStatus: "reviewing",
       },
       context,
+      {
+        // Start scoring while the search is still going. Waiting for the whole search
+        // meant a posting found in minute two sat unscored until minute thirty, and the
+        // scoring worker sat idle that entire time.
+        onJobsStaged: async (stagedTotal) => {
+          const queued = await queueScoringSweepIfIdle({
+            parentCommandId: context.command.id,
+            requestedBy: userId,
+            candidateProfileId: profile.id,
+            targetRoleId: role.id,
+            resumeVersionId: resume.id,
+            reason: `${stagedTotal} posting(s) staged so far`,
+          });
+          if (queued) {
+            await addCommandEvent(
+              context.command.id,
+              "scoring_sweep_nudged",
+              `Queued a scoring sweep while the search continues (${stagedTotal} posting(s) staged).`,
+              { commandId: queued.id, stagedTotal },
+            );
+          }
+        },
+      },
     )) as DiscoveryResult;
 
     const jobs = await getJobsByIds(discovery.jobIds ?? []);
@@ -184,25 +208,19 @@ export async function handleFindMatchingJobs(payload: unknown, context: HandlerC
       break;
     }
 
-    let matchingCommandId: string | null = null;
-    if (candidateJobIds.length) {
-      const child = await createWorkerChildCommand({
-        parentCommandId: context.command.id,
-        type: "run_local_llm_extraction",
-        requestedBy: context.command.requestedBy,
-        payloadJson: {
-          parentCommandId: context.command.id,
-          candidateProfileId: profile.id,
-          jobIds: candidateJobIds,
-          promptVersion: "job-match-prompt-v1",
-          policyVersion: "job-match-policy-v2",
-          targetRoleId: role.id,
-          resumeVersionId: resume.id,
-        },
-        priority: context.command.priority,
-      });
-      matchingCommandId = child.id;
-    }
+    // A sweep rather than this search's own list of survivors. The list form is what
+    // stranded postings: it was fixed here, at the very end, so a search interrupted
+    // before this line left everything it had found unscored with nothing to revisit it.
+    // A sweep asks the database what is unscored when it starts, so it always catches up.
+    const sweep = await queueScoringSweepIfIdle({
+      parentCommandId: context.command.id,
+      requestedBy: userId,
+      candidateProfileId: profile.id,
+      targetRoleId: role.id,
+      resumeVersionId: resume.id,
+      reason: "search finished",
+    });
+    const matchingCommandId = sweep?.id ?? null;
 
     roleResults.push({
       targetRoleId: role.id,

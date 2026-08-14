@@ -460,6 +460,8 @@ final class WorkerController {
     static let shared = WorkerController()
 
     private var process: Process?
+    /// Scores postings in its own process so it never waits behind the browser.
+    private var scorerProcess: Process?
     private var managedBrowserProcess: Process?
     private var logHandle: FileHandle?
     private(set) var state: WorkerState = .stopped
@@ -481,6 +483,11 @@ final class WorkerController {
     private func appendLog(_ line: String) {
         let stamped = "[\(ISO8601DateFormatter().string(from: Date()))] \(line)\n"
         guard let data = stamped.data(using: .utf8) else { return }
+        logHandle?.write(data)
+    }
+
+    /// Writes already-formatted bytes, for output that carries its own prefix.
+    private func appendRaw(_ data: Data) {
         logHandle?.write(data)
     }
 
@@ -601,6 +608,11 @@ final class WorkerController {
         var env = ProcessInfo.processInfo.environment
         for (key, value) in ConfigStore.shared.values { env[key] = value }
         env["PATH"] = "\(URL(fileURLWithPath: nodeBin).deletingLastPathComponent().path):/usr/local/bin:/usr/bin:/bin"
+        // Scoring runs in its own process, so this one must not claim it. Otherwise a
+        // half-hour of scoring would sit in front of the search that produced it.
+        env[Key.commandTypes] = ConfigStore.shared.selectedCommands()
+            .filter { $0 != Self.scoringCommandType }
+            .joined(separator: ",")
         task.environment = env
 
         let pipe = Pipe()
@@ -625,12 +637,74 @@ final class WorkerController {
             try task.run()
             process = task
             setState(.running)
+            startScorer(nodeBin: nodeBin, repoDir: repoDir, baseEnv: env)
         } catch {
             appendLog("failed to launch: \(error.localizedDescription)")
             notify(title: "Could not start", body: error.localizedDescription)
             try? logHandle?.close()
             logHandle = nil
             setState(.stopped)
+        }
+    }
+
+    /// The only command type the scoring process claims.
+    static let scoringCommandType = "run_local_llm_extraction"
+
+    /// A second worker that does nothing but score postings.
+    ///
+    /// Scoring and browsing used to take turns in one process, so a posting found in the
+    /// second minute of a search stayed unscored until the search ended half an hour later
+    /// — and the model sat idle throughout. Splitting them lets scoring keep pace with
+    /// discovery instead of queueing behind it.
+    ///
+    /// Claiming is safe across processes: the dashboard hands out commands with an atomic
+    /// `FOR UPDATE SKIP LOCKED` update, so the two can never take the same one. The worker
+    /// id must differ though — completion and heartbeats are matched on it, and a shared id
+    /// would let each finish the other's work.
+    private func startScorer(nodeBin: String, repoDir: String, baseEnv: [String: String]) {
+        guard ConfigStore.shared.selectedCommands().contains(Self.scoringCommandType) else {
+            appendLog("[scorer] not enabled in settings; skipping")
+            return
+        }
+
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: nodeBin)
+        task.arguments = ["--import", "tsx", "worker/src/runner.ts"]
+        task.currentDirectoryURL = URL(fileURLWithPath: repoDir)
+
+        var env = baseEnv
+        env[Key.commandTypes] = Self.scoringCommandType
+        env["WORKER_ID"] = "\(baseEnv["WORKER_ID"] ?? "job-worker-01")-scorer"
+        task.environment = env
+
+        let pipe = Pipe()
+        task.standardOutput = pipe
+        task.standardError = pipe
+        pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
+            let data = handle.availableData
+            guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
+            // Both processes share one log, so mark which is speaking.
+            let tagged = text
+                .components(separatedBy: "\n")
+                .filter { !$0.isEmpty }
+                .map { "[scorer] \($0)" }
+                .joined(separator: "\n")
+            guard !tagged.isEmpty, let out = (tagged + "\n").data(using: .utf8) else { return }
+            self?.appendRaw(out)
+        }
+        task.terminationHandler = { [weak self] finished in
+            pipe.fileHandleForReading.readabilityHandler = nil
+            self?.appendLog("[scorer] exited (status \(finished.terminationStatus))")
+            self?.scorerProcess = nil
+        }
+
+        do {
+            try task.run()
+            scorerProcess = task
+            appendLog("--- starting scoring worker ---")
+        } catch {
+            // Not fatal: scoring still happens, just serialised behind the browser worker.
+            appendLog("[scorer] failed to launch: \(error.localizedDescription)")
         }
     }
 
@@ -641,18 +715,36 @@ final class WorkerController {
         if state == .stopping {
             appendLog("--- force killing worker ---")
             kill(task.processIdentifier, SIGKILL)
+            if let scorer = scorerProcess, scorer.isRunning {
+                kill(scorer.processIdentifier, SIGKILL)
+            }
             return
         }
         appendLog("--- stop requested (graceful) ---")
         setState(.stopping)
         kill(task.processIdentifier, SIGTERM)
+        // Scoring has no browser to unwind, so it stops as soon as its current posting is
+        // done. Left running it would keep claiming work after the user asked for a stop.
+        if let scorer = scorerProcess, scorer.isRunning {
+            kill(scorer.processIdentifier, SIGTERM)
+        }
     }
 
     /// App termination must not orphan a worker that can keep claiming commands after a
     /// replacement JobAgent starts. Give the direct Node runner a brief graceful window,
     /// then make the shutdown definitive.
     func shutdownForAppExit() {
-        guard let task = process, task.isRunning else { return }
+        // Killed first and unconditionally: an orphaned scorer keeps claiming commands
+        // that a replacement JobAgent would then never see finish.
+        if let scorer = scorerProcess, scorer.isRunning {
+            kill(scorer.processIdentifier, SIGTERM)
+        }
+        guard let task = process, task.isRunning else {
+            if let scorer = scorerProcess, scorer.isRunning {
+                kill(scorer.processIdentifier, SIGKILL)
+            }
+            return
+        }
         appendLog("--- app exiting; stopping worker ---")
         kill(task.processIdentifier, SIGTERM)
         let deadline = Date().addingTimeInterval(2)
@@ -662,6 +754,9 @@ final class WorkerController {
         if task.isRunning {
             appendLog("--- worker did not exit promptly; force killing ---")
             kill(task.processIdentifier, SIGKILL)
+        }
+        if let scorer = scorerProcess, scorer.isRunning {
+            kill(scorer.processIdentifier, SIGKILL)
         }
     }
 

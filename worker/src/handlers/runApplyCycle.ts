@@ -8,6 +8,7 @@ import {
   getActiveTargetRolesForUser,
   getCandidateProfileForUser,
   getUnscoredJobIdsForRole,
+  queueScoringSweepIfIdle,
   getWorkerDb,
 } from "../db";
 import { requireCommandUserId } from "../requireCommandUserId";
@@ -104,9 +105,8 @@ export async function handleRunApplyCycle(
       });
       matchingCommandIds.push(child.id);
 
-      // Catch up on anything a previous run stranded. A search that is interrupted after
-      // saving postings but before queueing their scoring leaves them unscored forever —
-      // nothing else ever revisits them, and an unscored job can never be applied to.
+      // Start the scoring worker off immediately, so it clears whatever earlier runs left
+      // unscored while this search is still going rather than after it.
       if (profile) {
         const stranded = await getUnscoredJobIdsForRole(
           userId,
@@ -114,28 +114,23 @@ export async function handleRunApplyCycle(
           MAX_DISCOVERY_RESULTS_PER_COMMAND,
         );
         if (stranded.length) {
-          const catchUp = await createWorkerChildCommand({
+          const catchUp = await queueScoringSweepIfIdle({
             parentCommandId: context.command.id,
-            type: "run_local_llm_extraction",
             requestedBy: userId,
-            payloadJson: {
-              parentCommandId: context.command.id,
-              candidateProfileId: profile.id,
-              jobIds: stranded,
-              promptVersion: "job-match-prompt-v1",
-              policyVersion: "job-match-policy-v2",
-              targetRoleId: role.id,
-              resumeVersionId: role.resumeVersionId,
-            },
-            priority: "normal",
+            candidateProfileId: profile.id,
+            targetRoleId: role.id,
+            resumeVersionId: role.resumeVersionId,
+            reason: "cycle started",
           });
-          matchingCommandIds.push(catchUp.id);
-          await addCommandEvent(
-            context.command.id,
-            "apply_cycle_scoring_catch_up",
-            `Queued scoring for ${stranded.length} posting(s) an earlier run left unscored.`,
-            { targetRoleId: role.id, jobCount: stranded.length, commandId: catchUp.id },
-          );
+          if (catchUp) {
+            matchingCommandIds.push(catchUp.id);
+            await addCommandEvent(
+              context.command.id,
+              "apply_cycle_scoring_catch_up",
+              `Queued a scoring sweep; ${stranded.length} posting(s) are currently unscored.`,
+              { targetRoleId: role.id, unscoredNow: stranded.length, commandId: catchUp.id },
+            );
+          }
         }
       }
     }

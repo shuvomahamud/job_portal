@@ -38,6 +38,12 @@ test("a sweep needs neither a job list nor a parent search", () => {
   assert.equal(parsed.parentCommandId, undefined);
 });
 
+test("the queueing reason is accepted", () => {
+  // The schema is strict, so a field the queuer sets but the handler has not declared
+  // fails the command outright — which is exactly how the first sweeps died.
+  assert.equal(payloadSchema.parse(sweep).reason, "cycle started");
+});
+
 test("the old fixed-list form still parses", () => {
   // find_matching_jobs used to queue scoring with the exact survivors of its own search.
   // Existing queued commands must keep working across the deploy.

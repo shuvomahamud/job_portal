@@ -6,6 +6,7 @@ import { dispatchCommand, supportedPhase2CommandTypes } from "./dispatcher";
 import { logger } from "./logger";
 import { verifyOllamaHealth } from "./ai/ollamaClient";
 import { acquireWorkerProcessLock } from "./processLock";
+import { queueImpliedWork } from "./selfDrive";
 import type { DashboardCommand } from "./types";
 
 let stopping = false;
@@ -156,6 +157,15 @@ export async function runWorkerLoop() {
     }
 
     if (claimed === 0) {
+      // Nothing was waiting, so look at the data instead of the queue: anything unscored,
+      // anything scored and never applied to. This is what makes stopping and starting
+      // resume by itself — there is no position to recover, only a world to look at.
+      const implied = await queueImpliedWork(commandTypes);
+      if (implied.queued) {
+        idlePolls = 0;
+        continue;
+      }
+
       idlePolls += 1;
       const backoffSeconds = Math.min(
         cfg.WORKER_POLL_INTERVAL_SECONDS + Math.floor(idlePolls / 30) * cfg.WORKER_POLL_INTERVAL_SECONDS,

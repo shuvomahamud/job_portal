@@ -820,3 +820,159 @@ export async function getUnscoredJobIdsForRole(
     .limit(limit);
   return rows.map((row) => row.id);
 }
+
+/**
+ * Queues a scoring sweep unless one is already waiting or running.
+ *
+ * Scoring is triggered from several places — the start of a cycle, every batch of newly
+ * staged postings, the end of a search — and without this they would pile up, each one
+ * re-reading the same unscored jobs.
+ *
+ * Deliberately a check then an insert rather than a database lock. Two triggers firing at
+ * the same instant could still queue two, and that is harmless: one scoring worker runs
+ * them in turn, and the second finds nothing left because a sweep asks what is unscored
+ * when it starts. The cost of a lock is not worth removing a duplicate that does nothing.
+ *
+ * Returns the new command, or null when one was already pending.
+ */
+export async function queueScoringSweepIfIdle(input: {
+  /** Null when nothing spawned this — a worker noticed unscored postings on its own. */
+  parentCommandId: string | null;
+  requestedBy: string;
+  candidateProfileId: string;
+  targetRoleId: string;
+  resumeVersionId: string;
+  reason: string;
+}) {
+  const database = getWorkerDb();
+  const [existing] = await database
+    .select({ id: schema.commands.id })
+    .from(schema.commands)
+    .where(
+      and(
+        eq(schema.commands.type, "run_local_llm_extraction"),
+        eq(schema.commands.requestedBy, input.requestedBy),
+        inArray(schema.commands.status, ["pending", "claimed"]),
+      ),
+    )
+    .limit(1);
+  if (existing) return null;
+
+  const payloadJson = {
+    // No jobIds and no parentCommandId: this is a sweep, and it decides what to score
+    // when it runs rather than inheriting a list fixed at queue time.
+    candidateProfileId: input.candidateProfileId,
+    promptVersion: "job-match-prompt-v1",
+    policyVersion: "job-match-policy-v2",
+    targetRoleId: input.targetRoleId,
+    resumeVersionId: input.resumeVersionId,
+    reason: input.reason,
+  };
+
+  // A worker that noticed unscored postings on its own has no parent to hang this from.
+  if (!input.parentCommandId) {
+    const [command] = await database
+      .insert(schema.commands)
+      .values({
+        type: "run_local_llm_extraction",
+        source: "worker",
+        requestedBy: input.requestedBy,
+        payloadJson,
+        priority: "normal",
+      })
+      .returning();
+    return command ?? null;
+  }
+
+  return createWorkerChildCommand({
+    parentCommandId: input.parentCommandId,
+    type: "run_local_llm_extraction",
+    requestedBy: input.requestedBy,
+    payloadJson: {
+      candidateProfileId: input.candidateProfileId,
+      promptVersion: "job-match-prompt-v1",
+      policyVersion: "job-match-policy-v2",
+      targetRoleId: input.targetRoleId,
+      resumeVersionId: input.resumeVersionId,
+      reason: input.reason,
+    },
+    priority: "normal",
+  });
+}
+
+/**
+ * Postings that are scored well enough to apply to and have no application row yet.
+ *
+ * This is the applier's whole input. It is deliberately a question about current state
+ * rather than a list handed over by a previous phase, so the applier resumes correctly
+ * after any interruption and can never work from a stale set.
+ *
+ * The set is naturally bounded — it only grows when a search finds something that then
+ * scores well — which is why the applier needs no run target to stop it. It drains and
+ * goes idle.
+ */
+export async function getEligibleUnappliedJobIds(
+  userId: string,
+  limit: number,
+): Promise<string[]> {
+  const database = getWorkerDb();
+  const rows = await database
+    .select({ jobId: schema.jobRoleMatches.jobId })
+    .from(schema.jobRoleMatches)
+    .innerJoin(schema.targetRoles, eq(schema.targetRoles.id, schema.jobRoleMatches.targetRoleId))
+    .where(
+      and(
+        eq(schema.jobRoleMatches.userId, userId),
+        eq(schema.jobRoleMatches.status, "match"),
+        eq(schema.targetRoles.active, true),
+        notExists(
+          database
+            .select({ id: schema.applications.id })
+            .from(schema.applications)
+            .where(
+              and(
+                eq(schema.applications.jobId, schema.jobRoleMatches.jobId),
+                eq(schema.applications.userId, userId),
+              ),
+            ),
+        ),
+      ),
+    )
+    .orderBy(desc(schema.jobRoleMatches.score))
+    .limit(limit);
+  return rows.map((row) => row.jobId);
+}
+
+/** Queues an apply run unless one is already waiting or running. */
+export async function queueApplyRunIfIdle(input: {
+  requestedBy: string;
+  jobIds: string[];
+  mode: string;
+}) {
+  if (!input.jobIds.length) return null;
+  const database = getWorkerDb();
+  const [existing] = await database
+    .select({ id: schema.commands.id })
+    .from(schema.commands)
+    .where(
+      and(
+        eq(schema.commands.type, "apply_to_jobs"),
+        eq(schema.commands.requestedBy, input.requestedBy),
+        inArray(schema.commands.status, ["pending", "claimed"]),
+      ),
+    )
+    .limit(1);
+  if (existing) return null;
+
+  const [command] = await database
+    .insert(schema.commands)
+    .values({
+      type: "apply_to_jobs",
+      source: "worker",
+      requestedBy: input.requestedBy,
+      payloadJson: { jobIds: input.jobIds, mode: input.mode, maxJobs: input.jobIds.length },
+      priority: "normal",
+    })
+    .returning();
+  return command ?? null;
+}

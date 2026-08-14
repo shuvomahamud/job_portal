@@ -50,7 +50,26 @@ export const payloadSchema = z.object({
 
 type StopReason = "completed" | "canceled" | "time_limit" | "quota_reached";
 
-export async function handleDiscoverJobsBrowser(payload: unknown, context: HandlerContext): Promise<HandlerResult> {
+/**
+ * Lets the caller react while discovery is still running.
+ *
+ * Discovery is generic and knows nothing about roles or resumes, but it is the only place
+ * that knows when postings land. Scoring has to start during the search rather than after
+ * it, so the caller — which does know the role — supplies the reaction.
+ */
+export type DiscoveryHooks = {
+  /** Called each time newly staged postings push the running total past another batch. */
+  onJobsStaged?: (stagedTotal: number) => Promise<void>;
+};
+
+/** Postings staged between scoring nudges. */
+const SCORING_NUDGE_BATCH = 10;
+
+export async function handleDiscoverJobsBrowser(
+  payload: unknown,
+  context: HandlerContext,
+  hooks: DiscoveryHooks = {},
+): Promise<HandlerResult> {
   const cfg = getConfig();
   const userId = requireCommandUserId(context.command.requestedBy);
   if (!cfg.JOB_BROWSER_DISCOVERY_ENABLED) {
@@ -82,6 +101,8 @@ export async function handleDiscoverJobsBrowser(payload: unknown, context: Handl
   const visitedSearches: string[] = [];
   let stopReason: StopReason = "completed";
   let duplicateCount = 0;
+  let stagedSinceNudge = 0;
+  let stagedTotal = 0;
   let page: PageLike | null = null;
 
   try {
@@ -181,6 +202,20 @@ export async function handleDiscoverJobsBrowser(payload: unknown, context: Handl
                 `Added ${staged.length} new ${source} link(s) to the board before enrichment.`,
                 { source, query, location, searchPage, jobIds: staged.map((job) => job.id) },
               );
+
+              stagedSinceNudge += staged.length;
+              stagedTotal += staged.length;
+              if (stagedSinceNudge >= SCORING_NUDGE_BATCH && hooks.onJobsStaged) {
+                stagedSinceNudge = 0;
+                // Never let a scoring nudge take the search down with it.
+                try {
+                  await hooks.onJobsStaged(stagedTotal);
+                } catch (error) {
+                  logger.warn("Scoring nudge failed during discovery", {
+                    error: error instanceof Error ? error.message : String(error),
+                  });
+                }
+              }
             }
 
             let savedThisPage = 0;

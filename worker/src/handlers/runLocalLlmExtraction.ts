@@ -51,6 +51,8 @@ const payloadSchema = z
     policyVersion: z.literal("job-match-policy-v2"),
     targetRoleId: z.uuid(),
     resumeVersionId: z.uuid(),
+    /** Why this sweep was queued. Recorded for the activity log, not used for control. */
+    reason: z.string().trim().max(200).optional(),
   })
   .strict();
 
