@@ -1,4 +1,5 @@
 import type { FrameLike, LocatorLike, PageLike } from "../browser/playwrightTypes";
+import { detectBrowserBlocker } from "../browser/blockerDetection";
 
 export type SiteAdapter = {
   source: "indeed" | "dice" | "fixture";
@@ -53,9 +54,19 @@ const indeedAdapter: SiteAdapter = {
     );
   },
   async detectBlocked(page) {
-    const text = await page.locator("body").innerText({ timeout: 2000 }).catch(() => "");
-    if (/captcha|verify you are human|unusual traffic|access denied/i.test(text)) {
-      return { blocked: true, reason: "Blocked by anti-bot or captcha challenge." };
+    // Delegates to the shared detector rather than testing for the bare word "captcha".
+    //
+    // That test was matching Indeed's own apply form: the footer carries a "protected by
+    // reCAPTCHA" notice, so a perfectly ordinary "Add your location" page was declared a
+    // challenge. The run stopped, an alert fired, and the tab was left open on a form
+    // nobody was filling — with the real challenge nowhere to be seen.
+    //
+    // The shared detector already knows better: it needs a *visible* challenge element or
+    // explicit human-verification wording, precisely because Indeed embeds invisible
+    // reCAPTCHA on ordinary pages.
+    const blocker = await detectBrowserBlocker(page);
+    if (blocker) {
+      return { blocked: true, reason: blocker.message };
     }
     return { blocked: false, reason: "" };
   },
