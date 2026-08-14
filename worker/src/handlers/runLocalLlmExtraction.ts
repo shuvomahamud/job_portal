@@ -29,6 +29,7 @@ import {
 } from "../db";
 import { requireCommandUserId } from "../requireCommandUserId";
 import { isApplyRunActive } from "../ai/applyPriority";
+import { withOllamaLock } from "../ai/ollamaLock";
 import { isResumeHealthyForActivation } from "../../../src/lib/resumeHealth";
 import type { HandlerContext, HandlerResult } from "../types";
 import { MAX_DISCOVERY_RESULTS_PER_COMMAND } from "../../../src/lib/runLimits";
@@ -76,7 +77,12 @@ async function assessWithRetry(provider: JobMatchProvider, input: Parameters<Job
   let lastError: Error | null = null;
   for (let attempt = 1; attempt <= retryLimit + 1; attempt += 1) {
     try {
-      return { evidence: await provider.assess(input), attempt, error: null };
+      // Scoring only touches the model when applying is not using it. Giving up rather
+      // than queueing keeps a posting from being scored while a real form waits for the
+      // same model; the sweep will come back for it.
+      const evidence = await withOllamaLock("scoring", () => provider.assess(input));
+      if (evidence === null) throw new Error("Ollama is in use by an application; deferring this posting.");
+      return { evidence, attempt, error: null };
     } catch (error) {
       lastError = error instanceof Error ? error : new Error("Unknown AI provider error.");
     }

@@ -37,6 +37,7 @@ import {
 } from "./applyEligibility";
 import { adapterFor, isExternalAts, sourceUrlAllowed } from "./applySteps";
 import { decideExternalSiteApply } from "./externalSitePolicy";
+import { withOllamaLock } from "../ai/ollamaLock";
 import { fillDetectedField } from "./fillField";
 import {
   createHumanTyping,
@@ -710,10 +711,15 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
       if (mode !== "dry_run") {
         fields = await expandComboboxOptions(frame, fields);
       }
-      const enhanced = await enhanceFieldsWithOllama(fields, matchSettings, {
-        maxCalls: 5,
-        minConfidence: 0.55,
-      });
+      // Applying takes the model ahead of scoring: there is an employer's form open and
+      // waiting. Held across the whole classification pass rather than per call, so a
+      // scoring request cannot slip in between two questions of the same form.
+      const enhanced = (await withOllamaLock("applying", () =>
+        enhanceFieldsWithOllama(fields, matchSettings, {
+          maxCalls: 5,
+          minConfidence: 0.55,
+        }),
+      )) ?? { fields, calls: 0, available: false };
       fields = enhanced.fields;
       let llmCalls = enhanced.calls;
 
@@ -733,10 +739,8 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
           llmCalls < 5
         ) {
           llmCalls += 1;
-          const mapped = await mapDropdownWithOllama(
-            field,
-            suggestedValue,
-            matchSettings,
+          const mapped = await withOllamaLock("applying", () =>
+            mapDropdownWithOllama(field, suggestedValue!, matchSettings),
           );
           if (mapped) {
             suggestedValue = mapped;
