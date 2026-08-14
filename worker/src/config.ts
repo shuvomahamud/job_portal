@@ -119,6 +119,17 @@ const envSchema = z.object({
   // Minimum match score for an off-board apply, inclusive. Far above the on-board bar
   // because the cost of a bad one is an account and an irreversible submission.
   JOB_APPLY_EXTERNAL_MIN_SCORE: intFromEnv(80, 0, 100),
+  // Let a model find controls on employer sites, where there is no adapter and guessing
+  // from button wording picks "Save and close" instead of "Continue". Never used on Indeed
+  // or Dice: those are rehearsed, and paying inference to rediscover a known button on
+  // every application would undo the pacing work outright.
+  JOB_BROWSER_AGENT_ENABLED: boolFromEnv(false),
+  // Defaults to the scoring model on purpose. It is already resident, so it costs no extra
+  // memory and no load time — which on 24 GB shared with Chrome beats a smaller model that
+  // has to be swapped in. Set this only if measurement says otherwise.
+  JOB_BROWSER_AGENT_MODEL: z.string().trim().min(1).max(100).optional(),
+  JOB_BROWSER_AGENT_MAX_STEPS: intFromEnv(30, 1, 100),
+  JOB_BROWSER_AGENT_TOOL_TIMEOUT_MS: intFromEnv(45000, 1000, 180000),
   WORKER_OWNER_USER_ID: z.string().uuid().optional(),
 });
 

@@ -34,6 +34,7 @@
     "worker:test": "tsx --test worker/tests/*.test.ts"
   },
   "dependencies": {
+    "@browserbasehq/stagehand": "3.7.1",
     "@clerk/nextjs": "^7.6.1",
     "@neondatabase/serverless": "^1.1.0",
     "clsx": "^2.1.1",
