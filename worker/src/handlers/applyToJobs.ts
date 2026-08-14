@@ -219,7 +219,12 @@ export async function handleApplyToJobs(
     // of the challenge: the saved URL is a step inside a stateful apply flow, so nobody —
     // not the user, not a later run — can navigate back to it and solve it. Leaving the
     // tab open is what makes "solve it and resume" possible at all.
-    const leaveOpenForHuman = runStopReason === "blocked";
+    // A stall is left open for the same reason as a challenge. The form is usually
+    // almost complete when the agent gives up on it, so closing the tab throws away work
+    // a person could finish in seconds — and takes with it the only evidence of what
+    // actually went wrong.
+    const stalled = results.some((result) => result.stopReason === "stalled");
+    const leaveOpenForHuman = runStopReason === "blocked" || stalled;
     if (leaveOpenForHuman) {
       logger.info("Leaving the apply browser open for a human", {
         commandId: context.command.id,
@@ -228,8 +233,10 @@ export async function handleApplyToJobs(
       await addCommandEvent(
         context.command.id,
         "apply_browser_left_open",
-        "Stopped on a challenge that needs a person. The browser tab is still open on it — solve it there, then resume.",
-        { runStopReason },
+        stalled
+          ? "The form could not be advanced automatically. The tab is still open on it, filled in as far as the agent got."
+          : "Stopped on a challenge that needs a person. The browser tab is still open on it — solve it there, then resume.",
+        { runStopReason, stalled },
       );
     } else {
       if (page) {
