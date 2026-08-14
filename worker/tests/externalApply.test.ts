@@ -148,3 +148,27 @@ test("an unrecognised label is not guessed at", async () => {
   assert.equal(classifyControlLabel("Learn more").advances, false);
   assert.equal(classifyControlLabel("").advances, false);
 });
+
+// ---- Stagehand plumbing ----
+
+test("an http CDP endpoint is turned into the websocket address Stagehand needs", async () => {
+  // Stagehand rejects the http endpoint with a bare "Unexpected server response: 404",
+  // which says nothing about wanting a ws:// address. Worth pinning so nobody rediscovers
+  // that the slow way.
+  const { resolveCdpWebSocketUrl } = await import("../src/apply/external/stagehandLocator");
+  const original = globalThis.fetch;
+  globalThis.fetch = (async () =>
+    new Response(
+      JSON.stringify({ webSocketDebuggerUrl: "ws://127.0.0.1:9222/devtools/browser/abc" }),
+    )) as typeof fetch;
+  try {
+    assert.equal(
+      await resolveCdpWebSocketUrl("http://127.0.0.1:9222"),
+      "ws://127.0.0.1:9222/devtools/browser/abc",
+    );
+    // Already a socket address: passed through untouched rather than re-resolved.
+    assert.equal(await resolveCdpWebSocketUrl("ws://x/y"), "ws://x/y");
+  } finally {
+    globalThis.fetch = original;
+  }
+});
