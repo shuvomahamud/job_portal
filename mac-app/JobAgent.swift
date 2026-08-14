@@ -41,6 +41,12 @@ enum Key {
     static let applyMaxPerRun = "JOB_APPLY_MAX_PER_RUN"
     static let applyArtifacts = "JOB_APPLY_ARTIFACT_DIR"
 
+    // Applying on an employer's own site, rather than stopping at Indeed or Dice.
+    static let externalSites = "JOB_APPLY_EXTERNAL_SITES_ENABLED"
+    static let externalMinScore = "JOB_APPLY_EXTERNAL_MIN_SCORE"
+    // Lets a model find controls on employer forms, where there is no adapter.
+    static let browserAgent = "JOB_BROWSER_AGENT_ENABLED"
+
     // A macOS notification never leaves the Mac — Apple Watch mirrors the iPhone, not this
     // machine. These send the same alerts to a phone through ntfy.
     static let pushEnabled = "JOB_APPLY_PUSH_ENABLED"
@@ -339,6 +345,7 @@ final class ConfigStore {
             Key.ollamaModel: "qwen3.5:9b",
             Key.applyEnabled: "false",
             Key.applyMode: "dry_run",
+            Key.externalMinScore: "80",
             Key.applyMaxPerRun: "15",
             Key.applyArtifacts: "\(home)/.job-worker-artifacts",
         ]
@@ -893,6 +900,9 @@ final class MainWindowController: NSWindowController, NSTextFieldDelegate, NSTex
     private let applyModePopup = NSPopUpButton()
     private let applyRunLimitField = NSTextField()
     private let artifactsField = NSTextField()
+    private let externalSitesSwitch = NSSwitch()
+    private let externalMinScoreField = NSTextField()
+    private let browserAgentSwitch = NSSwitch()
     private let pushEnabledSwitch = NSSwitch()
     private let ntfyTopicField = NSTextField()
     private var commandBoxes: [String: NSButton] = [:]
@@ -1234,7 +1244,7 @@ final class MainWindowController: NSWindowController, NSTextFieldDelegate, NSTex
 
         for field in [dashboardField, databaseField, secretField, ownerField,
                       profileField, ollamaURLField, ollamaModelField, applyRunLimitField, artifactsField,
-                      ntfyTopicField] {
+                      ntfyTopicField, externalMinScoreField] {
             field.delegate = self
             field.translatesAutoresizingMaskIntoConstraints = false
             field.widthAnchor.constraint(equalToConstant: 420).isActive = true
@@ -1359,6 +1369,15 @@ final class MainWindowController: NSWindowController, NSTextFieldDelegate, NSTex
         form.addArrangedSubview(formRow("Screenshots folder", artifactRow))
 
         form.addArrangedSubview(sectionHeader(
+            "Employer websites",
+            subtitle: "Follow a posting to the company's own site and apply there, not just on Indeed and Dice."
+        ))
+        form.addArrangedSubview(formRow("Apply on employer sites", switchRow(externalSitesSwitch, "Follow the apply link off the job board")))
+        form.addArrangedSubview(formRow("Minimum score", externalMinScoreField,
+                                        hint: "Employer applications are harder to undo, so they need a stronger match than board applications."))
+        form.addArrangedSubview(formRow("Let a model find controls", switchRow(browserAgentSwitch, "Used only on employer forms, never on Indeed or Dice")))
+
+        form.addArrangedSubview(sectionHeader(
             "Phone notifications",
             subtitle: "A Mac notification stays on the Mac. Send them to your phone and watch too."
         ))
@@ -1438,11 +1457,14 @@ final class MainWindowController: NSWindowController, NSTextFieldDelegate, NSTex
         applyRunLimitField.stringValue = config.get(Key.applyMaxPerRun)
         artifactsField.stringValue = config.get(Key.applyArtifacts)
         ntfyTopicField.stringValue = config.get(Key.ntfyTopic)
+        externalMinScoreField.stringValue = config.get(Key.externalMinScore)
 
         headlessSwitch.state = config.bool(Key.browserHeadless) ? .on : .off
         discoverySwitch.state = config.bool(Key.browserDiscovery) ? .on : .off
         applyEnabledSwitch.state = config.bool(Key.applyEnabled) ? .on : .off
         pushEnabledSwitch.state = config.bool(Key.pushEnabled) ? .on : .off
+        externalSitesSwitch.state = config.bool(Key.externalSites) ? .on : .off
+        browserAgentSwitch.state = config.bool(Key.browserAgent) ? .on : .off
         browserEnginePopup.selectItem(at: config.get(Key.browserChannel) == "bundled" ? 1 : 0)
 
         switch config.get(Key.applyMode) {
@@ -1474,11 +1496,14 @@ final class MainWindowController: NSWindowController, NSTextFieldDelegate, NSTex
         config.set(Key.applyMaxPerRun, applyRunLimitField.stringValue)
         config.set(Key.applyArtifacts, artifactsField.stringValue)
         config.set(Key.ntfyTopic, ntfyTopicField.stringValue)
+        config.set(Key.externalMinScore, externalMinScoreField.stringValue)
 
         config.set(Key.browserHeadless, headlessSwitch.state == .on ? "true" : "false")
         config.set(Key.browserDiscovery, discoverySwitch.state == .on ? "true" : "false")
         config.set(Key.applyEnabled, applyEnabledSwitch.state == .on ? "true" : "false")
         config.set(Key.pushEnabled, pushEnabledSwitch.state == .on ? "true" : "false")
+        config.set(Key.externalSites, externalSitesSwitch.state == .on ? "true" : "false")
+        config.set(Key.browserAgent, browserAgentSwitch.state == .on ? "true" : "false")
         config.set(Key.browserChannel, browserEnginePopup.indexOfSelectedItem == 0 ? "chrome" : "bundled")
 
         switch applyModePopup.indexOfSelectedItem {
