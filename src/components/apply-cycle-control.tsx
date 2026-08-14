@@ -2,8 +2,9 @@
 
 import { useCallback, useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { CircleDot, LoaderCircle, MonitorUp, Play, Square, TriangleAlert } from "lucide-react";
+import { Check, CircleDot, LoaderCircle, MonitorUp, Play, Square, TriangleAlert } from "lucide-react";
 import {
+  markBlockerHandled,
   openBrowserToUnblock,
   startApplyCycle,
   stopApplyCycle,
@@ -139,6 +140,15 @@ export function ApplyCycleControl({
     });
   }
 
+  function handled(alertId: string) {
+    startTransition(async () => {
+      const result = await markBlockerHandled(alertId);
+      setMessage(result.message);
+      await load();
+      router.refresh();
+    });
+  }
+
   function unblock(alertId: string) {
     startTransition(async () => {
       const result = await openBrowserToUnblock(alertId);
@@ -168,19 +178,36 @@ export function ApplyCycleControl({
                   <p className="mt-1 text-sm text-amber-800">{blocker.message}</p>
                 </div>
               </div>
-              <button
-                type="button"
-                className="primary-button"
-                onClick={() => unblock(blocker.id)}
-                disabled={pending}
-              >
-                {pending ? (
-                  <LoaderCircle className="size-4 animate-spin" />
-                ) : (
-                  <MonitorUp className="size-4" />
-                )}
-                Open browser to unblock
-              </button>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  className="primary-button"
+                  onClick={() => unblock(blocker.id)}
+                  disabled={pending}
+                >
+                  {pending ? (
+                    <LoaderCircle className="size-4 animate-spin" />
+                  ) : (
+                    <MonitorUp className="size-4" />
+                  )}
+                  Open browser to unblock
+                </button>
+                {/*
+                  The way out when the worker is wrong or the page is gone. Verification
+                  cannot clear an alert raised in error, and applying stands down while any
+                  alert is open — so without this a phantom blocker halts everything.
+                */}
+                <button
+                  type="button"
+                  className="flex items-center gap-1.5 rounded-xl border border-amber-400 px-3 py-2 text-sm font-medium text-amber-900 hover:bg-amber-100 disabled:opacity-50"
+                  onClick={() => handled(blocker.id)}
+                  disabled={pending}
+                  title="Clear this without the worker checking. Use when it is already sorted, or was never really blocked."
+                >
+                  <Check className="size-4" />
+                  I&rsquo;ve handled it
+                </button>
+              </div>
             </div>
           ))}
         </div>

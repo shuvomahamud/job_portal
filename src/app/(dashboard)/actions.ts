@@ -696,6 +696,83 @@ export async function openBrowserToUnblock(
 }
 
 /**
+ * Clears a blocker the user says they have dealt with.
+ *
+ * "Open browser to unblock" only clears an alert once the worker can *see* the challenge
+ * is gone. That is the right default — a dismissed dialog is not a solved CAPTCHA — but it
+ * leaves no way out when the worker is wrong or the challenge is unreachable: an alert
+ * raised on a page that no longer exists, or one raised in error, can never be verified
+ * away. Applying stands down while any alert is open, so a stuck alert silently halts
+ * everything.
+ *
+ * This is the manual override. It resolves the alert and puts the blocked command back on
+ * the queue, exactly as a successful verification would.
+ */
+export async function markBlockerHandled(
+  alertId: string,
+): Promise<{ ok: boolean; message: string }> {
+  const user = await requireDashboardUser();
+  const parsedId = z.uuid().parse(alertId);
+  const db = getDb();
+
+  const [alert] = await db
+    .update(automationAlerts)
+    .set({ status: "resolved", resolvedAt: new Date(), updatedAt: new Date() })
+    .where(
+      and(
+        eq(automationAlerts.id, parsedId),
+        eq(automationAlerts.userId, user.id),
+        eq(automationAlerts.status, "open"),
+      ),
+    )
+    .returning({ id: automationAlerts.id, site: automationAlerts.site, commandId: automationAlerts.commandId });
+
+  if (!alert) {
+    return { ok: false, message: "That alert is no longer open." };
+  }
+
+  // Put the blocked work back, the same as a verified unblock does. Without this the
+  // command it stopped stays finished and only the applier's own loop would pick things
+  // up again — losing a search that was halfway through.
+  let resumed = false;
+  if (alert.commandId) {
+    const [command] = await db
+      .update(commands)
+      .set({
+        status: "pending",
+        priority: "high",
+        scheduledFor: new Date(),
+        claimedBy: null,
+        claimedAt: null,
+        heartbeatAt: null,
+        completedAt: null,
+        resultJson: null,
+        errorMessage: null,
+        updatedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(commands.id, alert.commandId),
+          eq(commands.requestedBy, user.id),
+          sql`${commands.status} IN ('failed', 'completed')`,
+          sql`${commands.type} IN ('find_matching_jobs', 'discover_jobs_browser', 'apply_to_jobs', 'verify_submission')`,
+        ),
+      )
+      .returning({ id: commands.id });
+    resumed = Boolean(command);
+  }
+
+  revalidatePath("/applications");
+  revalidatePath("/commands");
+  return {
+    ok: true,
+    message: resumed
+      ? `Cleared the ${alert.site} blocker and put the stopped work back on the queue.`
+      : `Cleared the ${alert.site} blocker. Applying resumes on its own.`,
+  };
+}
+
+/**
  * Applies to one specific job now, on the user's explicit authorization.
  *
  * `manual` tells the worker to skip the "match" scoring gate. The automated cycle only
