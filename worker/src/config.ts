@@ -140,7 +140,12 @@ export function getConfig(): WorkerConfig {
   const configuredCommandTypes = parsed.WORKER_COMMAND_TYPES.split(",")
     .map((item) => item.trim())
     .filter(Boolean);
-  if (!configuredCommandTypes.includes("open_browser_login")) {
+  // Every worker that drives a browser must be able to answer an unblock request, so this
+  // is added whether or not it was configured. A scoring-only worker is the exception: it
+  // has no browser, and letting it claim these would take the request away from the worker
+  // that does — and put two processes in a fight over the same Chrome.
+  const drivesBrowser = configuredCommandTypes.some((type) => type !== "run_local_llm_extraction");
+  if (drivesBrowser && !configuredCommandTypes.includes("open_browser_login")) {
     configuredCommandTypes.push("open_browser_login");
   }
   cachedConfig = {

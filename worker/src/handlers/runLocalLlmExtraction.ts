@@ -21,21 +21,30 @@ import {
   getCommandById,
   getCommandStatus,
   getJobsByIds,
+  getUnscoredJobIdsForRole,
   getResumeVersionForUser,
   getTargetRoleForUser,
   persistMatchReview,
   upsertJobRoleMatch,
 } from "../db";
 import { requireCommandUserId } from "../requireCommandUserId";
+import { isApplyRunActive } from "../ai/applyPriority";
 import { isResumeHealthyForActivation } from "../../../src/lib/resumeHealth";
 import type { HandlerContext, HandlerResult } from "../types";
 import { MAX_DISCOVERY_RESULTS_PER_COMMAND } from "../../../src/lib/runLimits";
 
 const payloadSchema = z
   .object({
-    parentCommandId: z.uuid(),
+    /** Absent for a sweep, which is not the tail of any one search. */
+    parentCommandId: z.uuid().optional(),
     candidateProfileId: z.uuid(),
-    jobIds: z.array(z.uuid()).min(1).max(MAX_DISCOVERY_RESULTS_PER_COMMAND),
+    /**
+     * Absent for a sweep, which resolves its work when it runs rather than when it is
+     * queued. That distinction is the point: a sweep queued after ten postings were
+     * staged finds forty by the time it starts, and a list fixed up front is exactly how
+     * postings ended up stranded and unscored forever.
+     */
+    jobIds: z.array(z.uuid()).min(1).max(MAX_DISCOVERY_RESULTS_PER_COMMAND).optional(),
     model: z.string().trim().min(1).max(100).optional(),
     promptVersion: z.literal("job-match-prompt-v1"),
     policyVersion: z.literal("job-match-policy-v2"),
@@ -153,9 +162,11 @@ export async function handleRunLocalLlmExtraction(payload: unknown, context: Han
   const input = payloadSchema.parse(payload);
   const cfg = getConfig();
   const userId = requireCommandUserId(context.command.requestedBy);
-  const parent = await getCommandById(input.parentCommandId);
-  if (!parent || parent.type !== "find_matching_jobs") throw new Error("Local matching command has no valid matching-run parent.");
-  if (parent.requestedBy !== context.command.requestedBy) throw new Error("Local matching command ownership does not match its parent.");
+  if (input.parentCommandId) {
+    const parent = await getCommandById(input.parentCommandId);
+    if (!parent || parent.type !== "find_matching_jobs") throw new Error("Local matching command has no valid matching-run parent.");
+    if (parent.requestedBy !== context.command.requestedBy) throw new Error("Local matching command ownership does not match its parent.");
+  }
   const profile = await getCandidateProfileById(input.candidateProfileId, context.command.requestedBy);
   if (!profile) throw new Error("Matching candidate profile was not found for this command.");
 
@@ -195,7 +206,18 @@ export async function handleRunLocalLlmExtraction(payload: unknown, context: Han
     resumeFacts: formatResumeFacts(await getCandidateFactsForUser(userId), FACT_MIN_CONFIDENCE),
   });
   const profileFingerprint = fingerprintCandidate(candidate);
-  const jobs = await getJobsByIds(input.jobIds);
+  // A sweep decides what to score now, not when it was queued.
+  const jobIds = input.jobIds
+    ?? (await getUnscoredJobIdsForRole(userId, role.id, MAX_DISCOVERY_RESULTS_PER_COMMAND));
+  if (!jobIds.length) {
+    return {
+      sweep: true,
+      evaluatedCount: 0,
+      targetRoleId: role.id,
+      message: "Nothing left unscored.",
+    };
+  }
+  const jobs = await getJobsByIds(jobIds);
   const byId = new Map(jobs.map((job) => [job.id, job]));
   const matchedJobIds: string[] = [];
   const needsReviewJobIds: string[] = [];
@@ -206,22 +228,36 @@ export async function handleRunLocalLlmExtraction(payload: unknown, context: Han
   let remoteReviewCount = 0;
 
   await addCommandEvent(context.command.id, "local_matching_started", "AI worker started structured profile matching with Ollama.", {
-    parentCommandId: input.parentCommandId,
+    parentCommandId: input.parentCommandId ?? null,
     model: localProvider.model,
-    jobCount: input.jobIds.length,
+    jobCount: jobIds.length,
+    sweep: !input.jobIds,
     targetRoleId: role.id,
     resumeVersionId,
   });
 
-  for (const jobId of input.jobIds) {
+  let yieldedToApply = false;
+
+  for (const jobId of jobIds) {
     if (context.claimGuard.lost) {
       warnings.push("Matching stopped because the worker claim was lost.");
       break;
     }
-    const rootStatus = await getCommandStatus(input.parentCommandId);
+    const rootStatus = input.parentCommandId
+      ? await getCommandStatus(input.parentCommandId)
+      : null;
     const childStatus = await getCommandStatus(context.command.id);
     if (rootStatus === "canceled" || childStatus === "canceled") {
       warnings.push("Matching stopped because the run was canceled.");
+      break;
+    }
+    // Applying owns the local model while it is filling a real form. Checked between
+    // jobs so a request in flight is never abandoned half-finished; whatever is left
+    // unscored is picked up by the next sweep, since a sweep asks the database rather
+    // than carrying a list.
+    if (await isApplyRunActive(userId)) {
+      yieldedToApply = true;
+      warnings.push("Paused scoring while an application was in progress.");
       break;
     }
     const job = byId.get(jobId);
@@ -339,7 +375,7 @@ export async function handleRunLocalLlmExtraction(payload: unknown, context: Han
       if (finalDecision.status === "ready_to_apply") matchedJobIds.push(jobId);
       if (finalDecision.status === "needs_review") needsReviewJobIds.push(jobId);
       if (finalDecision.status === "archived") archivedJobIds.push(jobId);
-      await addCommandEvent(context.command.id, "local_matching_progress", `Matched ${evaluatedCount} of ${input.jobIds.length} staged job(s).`, {
+      await addCommandEvent(context.command.id, "local_matching_progress", `Matched ${evaluatedCount} of ${jobIds.length} staged job(s).`, {
         jobId,
         status: finalDecision.status,
         score: finalDecision.score,
@@ -357,10 +393,12 @@ export async function handleRunLocalLlmExtraction(payload: unknown, context: Han
     }
   }
 
-  const selectedMatches = await getBestEligibleRoleMatches(userId, input.jobIds);
+  const selectedMatches = await getBestEligibleRoleMatches(userId, jobIds);
 
   return {
-    parentCommandId: input.parentCommandId,
+    sweep: !input.jobIds,
+    yieldedToApply,
+    parentCommandId: input.parentCommandId ?? null,
     targetRoleId: role.id,
     resumeVersionId,
     evaluatedCount,
