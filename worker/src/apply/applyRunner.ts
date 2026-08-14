@@ -37,6 +37,13 @@ import {
 } from "./applyEligibility";
 import { adapterFor, isExternalAts, sourceUrlAllowed } from "./applySteps";
 import { decideExternalSiteApply } from "./externalSitePolicy";
+import {
+  classifyExternalPage,
+  controlIsSafeToSubmit,
+  findExternalAdvanceControl,
+  needsHuman,
+} from "./external/externalApply";
+import { decideSubmission } from "./external/submissionGuard";
 import { withOllamaLock } from "../ai/ollamaLock";
 import { fillDetectedField } from "./fillField";
 import {
@@ -550,6 +557,31 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
         `Following the posting to ${external.host} to apply on the employer's own site.`,
         { jobId: input.job.id, host: external.host, applyUrl, score: match?.score ?? null },
       );
+
+      // An employer's site can hand back anything. The board flow may assume it is looking
+      // at an application form; here that assumption is how an agent ends up typing a home
+      // address into a password field.
+      const kind = await classifyExternalPage(activePage, 0);
+      if (needsHuman(kind)) {
+        const reason = kind === "assessment"
+          ? `${external.host} requires an assessment, which needs you.`
+          : `${external.host} requires an account (${kind}), which needs you.`;
+        await upsertApplication({
+          userId: input.userId,
+          jobId: input.job.id,
+          status: "needs_manual",
+          stopReason: reason,
+          applyUrl,
+        });
+        await addCommandEvent(
+          input.commandId,
+          "external_site_needs_human",
+          reason,
+          { jobId: input.job.id, host: external.host, pageKind: kind, applyUrl },
+        );
+        await finishTrace(artifactCtx, true);
+        return { stopReason: "needs_manual", applicationId: application.id, artifacts: artifactCtx.paths };
+      }
     }
 
     await upsertApplication({
@@ -893,7 +925,24 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
         return { stopReason: "needs_answers", applicationId: application.id, artifacts: artifactCtx.paths };
       }
 
-      const advance = await adapter.findAdvanceControl(frame);
+      // On an employer's form the model looks first; on the boards it is never consulted,
+      // because those are rehearsed and paying inference to rediscover a known button on
+      // every application would give back the pacing work outright.
+      const external = onExternalSite
+        ? await findExternalAdvanceControl(frame, activePage, () =>
+            adapter.findAdvanceControl(frame),
+          )
+        : null;
+      const advance = external
+        ? {
+            locator: external.selector
+              ? frame.locator(external.selector).first()
+              : (external.locator as ReturnType<typeof frame.locator>),
+            // Re-derived from the label rather than trusted, so a model that calls
+            // "Save and close" a submit cannot make it one.
+            isTerminalSubmit: controlIsSafeToSubmit(external),
+          }
+        : await adapter.findAdvanceControl(frame);
       if (!advance) {
         if (fingerprint === previousFingerprint) {
           stallRetries += 1;
@@ -913,6 +962,38 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
       }
 
       if (advance.isTerminalSubmit) {
+        // The last check before something that cannot be taken back, and only on employer
+        // sites — the boards keep the checks they already had. A model may have found this
+        // button; it does not get to decide that it may be pressed.
+        if (onExternalSite) {
+          const decision = decideSubmission({
+            mode,
+            unansweredRequiredFields: asks.filter((ask) => ask.field.required).length,
+            openQuestions: asks.length,
+            blocked: false,
+            proposedByModel: external?.proposedByModel ?? false,
+            looksTerminal: advance.isTerminalSubmit,
+            resumeAttached: Boolean(resumePath),
+            score: match?.score ?? null,
+            minScore: cfg.JOB_APPLY_EXTERNAL_MIN_SCORE,
+          });
+          if (!decision.submit) {
+            await upsertApplication({
+              userId: input.userId,
+              jobId: input.job.id,
+              status: "needs_manual",
+              stopReason: decision.reason,
+            });
+            await addCommandEvent(
+              input.commandId,
+              "external_submit_withheld",
+              decision.reason,
+              { jobId: input.job.id, proposedByModel: external?.proposedByModel ?? false },
+            );
+            await finishTrace(artifactCtx, true);
+            return { stopReason: "needs_manual", applicationId: application.id, artifacts: artifactCtx.paths };
+          }
+        }
         if (await isApplyPaused(input.userId)) {
           await upsertApplication({
             userId: input.userId,

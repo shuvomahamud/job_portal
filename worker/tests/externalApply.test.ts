@@ -160,7 +160,7 @@ test("an http CDP endpoint is turned into the websocket address Stagehand needs"
   globalThis.fetch = (async () =>
     new Response(
       JSON.stringify({ webSocketDebuggerUrl: "ws://127.0.0.1:9222/devtools/browser/abc" }),
-    )) as typeof fetch;
+    )) as unknown as typeof fetch;
   try {
     assert.equal(
       await resolveCdpWebSocketUrl("http://127.0.0.1:9222"),
