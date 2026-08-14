@@ -914,17 +914,23 @@ export async function queueScoringSweepIfIdle(input: {
 export async function getEligibleUnappliedJobIds(
   userId: string,
   limit: number,
+  /** Boards currently waiting on the user. Their postings are skipped, not the rest. */
+  blockedSources: string[] = [],
 ): Promise<string[]> {
   const database = getWorkerDb();
   const rows = await database
     .select({ jobId: schema.jobRoleMatches.jobId })
     .from(schema.jobRoleMatches)
+    .innerJoin(schema.jobs, eq(schema.jobs.id, schema.jobRoleMatches.jobId))
     .innerJoin(schema.targetRoles, eq(schema.targetRoles.id, schema.jobRoleMatches.targetRoleId))
     .where(
       and(
         eq(schema.jobRoleMatches.userId, userId),
         eq(schema.jobRoleMatches.status, "match"),
         eq(schema.targetRoles.active, true),
+        ...(blockedSources.length
+          ? [notInArray(schema.jobs.source, blockedSources)]
+          : []),
         notExists(
           database
             .select({ id: schema.applications.id })
@@ -943,13 +949,19 @@ export async function getEligibleUnappliedJobIds(
   return rows.map((row) => row.jobId);
 }
 
-/** Queues an apply run unless one is already waiting or running. */
-export async function queueApplyRunIfIdle(input: {
+/**
+ * Queues one application, unless one is already waiting or running.
+ *
+ * Deliberately one job per command rather than a batch. A batch made every failure
+ * everyone's problem: a CAPTCHA on the first posting ended the run for the other
+ * forty-nine, a restart lost the whole batch, and nothing urgent could run in between.
+ * One per command means a blocker costs exactly the application it happened to.
+ */
+export async function queueNextApplicationIfIdle(input: {
   requestedBy: string;
-  jobIds: string[];
+  jobId: string;
   mode: string;
 }) {
-  if (!input.jobIds.length) return null;
   const database = getWorkerDb();
   const [existing] = await database
     .select({ id: schema.commands.id })
@@ -970,7 +982,7 @@ export async function queueApplyRunIfIdle(input: {
       type: "apply_to_jobs",
       source: "worker",
       requestedBy: input.requestedBy,
-      payloadJson: { jobIds: input.jobIds, mode: input.mode, maxJobs: input.jobIds.length },
+      payloadJson: { jobIds: [input.jobId], mode: input.mode, maxJobs: 1 },
       priority: "normal",
     })
     .returning();
@@ -978,25 +990,27 @@ export async function queueApplyRunIfIdle(input: {
 }
 
 /**
- * True when something is waiting on the user — a CAPTCHA, a login, a blocked browser.
+ * Which boards are currently waiting on the user.
  *
- * The self-driving applier has to consult this or it spins: an apply run stops on a
- * challenge, the worker goes idle, sees the same eligible postings still unapplied, and
- * queues another run straight back into the same wall. Every ten seconds, with a
- * notification each time.
+ * The applier has to consult this or it spins: an application stops on a challenge, the
+ * worker goes idle, sees the same posting still unapplied, and walks straight back into
+ * the same wall every ten seconds with a notification each time. Asking for help is only
+ * waiting if something stops the retry.
  *
- * "Ask for help and wait" is only actually waiting if something stops the retry.
+ * It returns the affected sites rather than a yes/no because the answer differs per board.
+ * Treating any open alert as "stop applying" meant an Indeed CAPTCHA also halted every
+ * Dice application, which had nothing to do with it — and when the alert turned out to be
+ * a false positive, that halted everything for hours.
  */
-export async function hasOpenBlockerAlert(userId: string): Promise<boolean> {
-  const [row] = await getWorkerDb()
-    .select({ id: schema.automationAlerts.id })
+export async function getBlockedSources(userId: string): Promise<string[]> {
+  const rows = await getWorkerDb()
+    .select({ site: schema.automationAlerts.site })
     .from(schema.automationAlerts)
     .where(
       and(
         eq(schema.automationAlerts.userId, userId),
         eq(schema.automationAlerts.status, "open"),
       ),
-    )
-    .limit(1);
-  return Boolean(row);
+    );
+  return [...new Set(rows.map((row) => row.site))];
 }

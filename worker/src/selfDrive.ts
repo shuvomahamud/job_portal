@@ -20,14 +20,13 @@ import {
   getActiveTargetRolesForUser,
   getCandidateProfileForUser,
   getEligibleUnappliedJobIds,
-  hasOpenBlockerAlert,
+  getBlockedSources,
   getUnscoredJobIdsForRole,
-  queueApplyRunIfIdle,
+  queueNextApplicationIfIdle,
   queueScoringSweepIfIdle,
 } from "./db";
 import { isApplyPaused } from "./apply/applyEligibility";
 import { logger } from "./logger";
-import { MAX_DISCOVERY_RESULTS_PER_COMMAND } from "../../src/lib/runLimits";
 
 export type SelfDriveResult = { queued: "scoring" | "applying" | null };
 
@@ -73,34 +72,23 @@ export async function queueImpliedWork(
       }
     }
 
-    // Something is waiting on the user — a CAPTCHA, a login wall — so applying stands
-    // down rather than walking straight back into it. Without this the loop spins: the
-    // run stops on the challenge, the worker goes idle, the same postings are still
-    // unapplied, and it queues another run into the same wall every ten seconds, with a
-    // notification each time. Asking for help is only waiting if the retry stops.
-    //
-    // Scoring is deliberately left running: it needs no browser, so a blocked Chrome is
-    // no reason for the model to sit idle.
-    if (commandTypes.includes("apply_to_jobs") && (await hasOpenBlockerAlert(userId))) {
-      return { queued: null };
-    }
-
     if (commandTypes.includes("apply_to_jobs") && cfg.JOB_APPLY_ENABLED) {
-      const jobIds = await getEligibleUnappliedJobIds(
-        userId,
-        MAX_DISCOVERY_RESULTS_PER_COMMAND,
-      );
-      if (jobIds.length) {
-        const queued = await queueApplyRunIfIdle({
+      // Skip the boards that are waiting on the user, not applying altogether. A CAPTCHA
+      // on Indeed says nothing about Dice, and treating any open alert as "stop" meant one
+      // false positive halted every application for hours.
+      //
+      // Scoring is unaffected either way: it needs no browser, so a blocked Chrome is no
+      // reason for the model to sit idle.
+      const blockedSources = await getBlockedSources(userId);
+      const [jobId] = await getEligibleUnappliedJobIds(userId, 1, blockedSources);
+      if (jobId) {
+        const queued = await queueNextApplicationIfIdle({
           requestedBy: userId,
-          jobIds,
+          jobId,
           mode: cfg.JOB_APPLY_MODE,
         });
         if (queued) {
-          logger.info("Queued applications for eligible postings", {
-            commandId: queued.id,
-            jobCount: jobIds.length,
-          });
+          logger.info("Queued the next application", { commandId: queued.id, jobId });
           return { queued: "applying" };
         }
       }
