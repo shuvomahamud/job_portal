@@ -1,0 +1,29 @@
+<!doctype html>
+<!--
+  Indeed's screening step, reduced to the thing that mattered.
+
+  The required questions carry no `required` or `aria-required` attribute; the only marker
+  is an asterisk in the legend. Every one of them therefore looked optional, was skipped
+  without a word, and the form then refused to advance with nothing to explain why.
+-->
+<html><body>
+<form id="apply">
+  <fieldset>
+    <legend>What type of work are you looking for? *</legend>
+    <label><input type="radio" name="q_837ba9c5" value="Full-time"> Full-time</label>
+    <label><input type="radio" name="q_837ba9c5" value="Contract"> Contract</label>
+  </fieldset>
+
+  <fieldset>
+    <legend>Would you like to opt-in to receive email notifications?</legend>
+    <label><input type="radio" name="q_80d7db28" value="Yes"> Yes</label>
+    <label><input type="radio" name="q_80d7db28" value="No"> No</label>
+  </fieldset>
+
+  <label for="zip">Zip code *</label>
+  <input id="zip" name="zip" type="text">
+
+  <label for="linkedin">LinkedIn profile</label>
+  <input id="linkedin" name="linkedin" type="text">
+</form>
+</body></html>

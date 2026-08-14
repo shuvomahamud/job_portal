@@ -178,3 +178,36 @@ test("form detection reaches iframes and open shadow roots and expands collapsed
     await context.close();
   }
 });
+
+test("an asterisk in the label marks a field required", async () => {
+  // Indeed sets neither `required` nor `aria-required` on its screening questions and
+  // marks the mandatory ones with a "*" in the text — its own contact page says "Fields
+  // marked with (*) are required". Reading only the attributes made every one of them
+  // look optional, so they were skipped in silence, nothing was ever asked of the user,
+  // and the form simply would not advance.
+  const playwright = await loadPlaywright();
+  const userDataDir = await mkdtemp(join(tmpdir(), "searchlight-asterisk-"));
+  const context = await playwright.chromium.launchPersistentContext(userDataDir, {
+    headless: true,
+    viewport: { width: 1280, height: 900 },
+  });
+  try {
+    const page = await context.newPage();
+    await page.goto(
+      pathToFileURL(join(process.cwd(), "worker/tests/fixtures/asterisk-required.html")).href,
+      { waitUntil: "domcontentloaded" },
+    );
+    const { frame } = await resolveFormRoot(page, []);
+    const fields = await detectFields(frame);
+
+    const required = (name: string) =>
+      fields.find((field) => field.name === name || field.idAttribute === name)?.required;
+
+    assert.equal(required("q_837ba9c5"), true, "starred question is required");
+    assert.equal(required("zip"), true, "starred text field is required");
+    assert.equal(required("q_80d7db28"), false, "an unstarred question stays optional");
+    assert.equal(required("linkedin"), false, "an unstarred field stays optional");
+  } finally {
+    await context.close();
+  }
+});

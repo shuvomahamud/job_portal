@@ -333,7 +333,13 @@ export function detectFieldBasesInPage(): FieldBase[] {
       idAttribute: element.id,
       required:
         element.hasAttribute("required") ||
-        element.getAttribute("aria-required") === "true",
+        element.getAttribute("aria-required") === "true" ||
+        // An asterisk in the label counts. Indeed's screening questions set neither
+        // attribute and mark the required ones with a "*" in their text — its own contact
+        // page says "Fields marked with (*) are required" — so every one of them looked
+        // optional, was skipped in silence, and then the form refused to advance with
+        // nothing to explain why.
+        /\*/.test(labelText),
       options: elementOptions(element),
       currentValue: currentValue(element),
       nearbyText: extractNearbyText(element),
