@@ -215,21 +215,39 @@ export async function handleApplyToJobs(
       message: `Apply run stopped (${runStopReason}) after ${results.length}/${runLimit} job(s): submitted=${summary.submitted} needs_answers=${summary.needsAnswers} blocked=${summary.blocked}.`,
     };
   } finally {
-    if (page) {
+    // A CAPTCHA lives in the page that hit it. Closing that page destroys the only copy
+    // of the challenge: the saved URL is a step inside a stateful apply flow, so nobody —
+    // not the user, not a later run — can navigate back to it and solve it. Leaving the
+    // tab open is what makes "solve it and resume" possible at all.
+    const leaveOpenForHuman = runStopReason === "blocked";
+    if (leaveOpenForHuman) {
+      logger.info("Leaving the apply browser open for a human", {
+        commandId: context.command.id,
+        reason: runStopReason,
+      });
+      await addCommandEvent(
+        context.command.id,
+        "apply_browser_left_open",
+        "Stopped on a challenge that needs a person. The browser tab is still open on it — solve it there, then resume.",
+        { runStopReason },
+      );
+    } else {
+      if (page) {
+        try {
+          await page.close();
+        } catch (error) {
+          logger.warn("Failed to close apply page", {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
       try {
-        await page.close();
+        await browserSession.close();
       } catch (error) {
-        logger.warn("Failed to close apply page", {
+        logger.warn("Failed to close apply browser session", {
           error: error instanceof Error ? error.message : String(error),
         });
       }
-    }
-    try {
-      await browserSession.close();
-    } catch (error) {
-      logger.warn("Failed to close apply browser session", {
-        error: error instanceof Error ? error.message : String(error),
-      });
     }
   }
 }
