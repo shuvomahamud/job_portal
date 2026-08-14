@@ -76,6 +76,34 @@ const diceAdapter: SiteAdapter = {
   ...indeedAdapter,
   source: "dice",
   allowedApplyHosts: ["dice.com"],
+  /**
+   * Dice needs its own, and inheriting Indeed's was why no Dice application ever started.
+   *
+   * Measured against a live posting: `getByRole("button", { name: /apply/i })` — the first
+   * thing the Indeed adapter tries — matches nothing at all, because Dice's control is not
+   * exposed with a button role. Every Dice application therefore sat on the job-detail page
+   * until it was declared stalled, which is exactly what eighteen of them did.
+   *
+   * Dice also offers two different things called apply, and the difference matters.
+   * "Easy Apply" is the on-platform form this system can actually complete. "Apply Now"
+   * leaves for the employer's own site, which is a different path with a much higher score
+   * bar and its own switch. So Easy Apply is preferred, and the external one is only taken
+   * when there is no other way in.
+   */
+  async findApplyButton(page) {
+    // Waits rather than checking once. Dice is a single-page app, and tonight's faster
+    // pacing cut the settle time that used to paper over a control rendering late; a
+    // 200ms glance at a page still assembling itself finds nothing and reports a stall.
+    const easy = page.getByText(/easy apply/i).first();
+    const appeared = await easy
+      .waitFor({ state: "visible", timeout: 8_000 })
+      .then(() => true)
+      .catch(() => false);
+    if (appeared) return easy;
+    return firstVisible(
+      page.locator('a:has-text("Apply Now"), button:has-text("Apply Now")'),
+    );
+  },
 };
 
 const fixtureAdapter: SiteAdapter = {

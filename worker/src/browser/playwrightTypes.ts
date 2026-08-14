@@ -39,6 +39,8 @@ export type FrameLike = {
   name(): string;
   locator(selector: string): LocatorLike;
   getByRole(role: string, options?: { name?: RegExp | string; exact?: boolean }): LocatorLike;
+  /** Matches on rendered text, for controls that carry no accessible role. */
+  getByText(text: RegExp | string, options?: { exact?: boolean }): LocatorLike;
   /** Function or string form — string is required when tsx injects `__name` helpers into nested fns. */
   evaluate<R>(pageFunction: string | (() => R)): Promise<R>;
   content(): Promise<string>;
