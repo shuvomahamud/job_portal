@@ -238,6 +238,19 @@ export async function getApplyCycleStatus(userId: string): Promise<ApplyCycleSta
           inArray(commands.type, [...CYCLE_TYPES]),
           eq(commands.status, "failed"),
           gte(commands.createdAt, failureCutoff),
+          // Hide a failure that something of the same kind has since succeeded past.
+          //
+          // Without this a fixed problem keeps sounding the alarm for a full day: a
+          // scoring command that failed at 2am on a bug repaired at 3am was still the
+          // headline at 7am, over the top of a scorer that had been working fine for
+          // hours. An alert nobody can clear is one people learn to ignore.
+          sql`NOT EXISTS (
+            SELECT 1 FROM ${commands} AS later
+            WHERE later.requested_by = ${userId}
+              AND later.type = ${commands.type}
+              AND later.status = 'completed'
+              AND later.completed_at > ${commands.completedAt}
+          )`,
         ),
       )
       .orderBy(desc(commands.createdAt))
