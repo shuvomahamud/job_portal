@@ -52,6 +52,14 @@ const STEP_LABELS: Record<string, string> = {
 
 export type ApplyCycleStatus = {
   running: boolean;
+  /**
+   * Whether a *search* is under way, as distinct from anything running at all.
+   *
+   * Drives the Run/Stop swap. Scoring and applying now run continuously off whatever is in
+   * the database, so keying the buttons off `running` would hide Run almost permanently —
+   * and Stop only stops searching anyway.
+   */
+  searchRunning: boolean;
   phase: ApplyCyclePhase;
   /** One sentence describing what is happening right now. */
   detail: string;
@@ -117,19 +125,17 @@ export async function hasApplyCycleInFlight(userId: string): Promise<boolean> {
 }
 
 /**
- * Stops everything belonging to the user's cycle: the parent, the search, the scoring
- * child, and the apply phase waiting on its timer.
+ * Stops looking for new jobs. Scoring and applying are left alone on purpose.
  *
- * Cancelling only the command that happens to be running now would leave the scheduled
- * apply phase behind to start on its own twenty minutes later, which is not what anyone
- * pressing "stop" means.
+ * They are working through postings that are already found, which is precisely what should
+ * continue once you decide you have enough of them. Quitting the worker from the Mac app
+ * is what stops everything.
  *
  * The worker notices at its next checkpoint rather than instantly — it re-reads command
- * status between search pages and between applications, and an application already being
- * filled is checked once more before the submit click. So a stop lands within about a
- * minute, and never abandons a half-filled form mid-submit.
+ * status between search pages — so a stop lands within about a minute and never abandons
+ * a page mid-navigation.
  */
-export async function cancelApplyCycle(
+export async function cancelSearch(
   userId: string,
 ): Promise<{ canceled: number; steps: string[] }> {
   const db = getDb();
@@ -144,7 +150,7 @@ export async function cancelApplyCycle(
     .where(
       and(
         eq(commands.requestedBy, userId),
-        inArray(commands.type, [...CYCLE_TYPES]),
+        inArray(commands.type, [...SEARCH_TYPES]),
         inArray(commands.status, [...IN_FLIGHT]),
       ),
     )
@@ -291,6 +297,7 @@ export async function getApplyCycleStatus(userId: string): Promise<ApplyCycleSta
     if (lastFailure) {
       return {
         running: false,
+        searchRunning: false,
         phase: "failed",
         detail: `The last run stopped at the ${STEP_LABELS[lastFailure.step] ?? lastFailure.step} step: ${lastFailure.message}`,
         startedAt: null,
@@ -300,6 +307,7 @@ export async function getApplyCycleStatus(userId: string): Promise<ApplyCycleSta
     }
     return {
       running: false,
+      searchRunning: false,
       phase: "idle",
       detail: "No apply cycle is running.",
       startedAt: null,
@@ -309,6 +317,9 @@ export async function getApplyCycleStatus(userId: string): Promise<ApplyCycleSta
   }
 
   const startedAt = iso(active[0]!.createdAt);
+  const searchRunning = active.some((row) =>
+    (SEARCH_TYPES as readonly string[]).includes(row.type),
+  );
   const has = (type: string, status?: string) =>
     active.find((row) => row.type === type && (!status || row.status === status));
 
@@ -316,6 +327,7 @@ export async function getApplyCycleStatus(userId: string): Promise<ApplyCycleSta
   if (has("apply_to_jobs")) {
     return {
       running: true,
+      searchRunning,
       phase: "applying",
       detail: "Filling and submitting applications. This is paced to human speed, so it takes a while.",
       startedAt,
@@ -326,6 +338,7 @@ export async function getApplyCycleStatus(userId: string): Promise<ApplyCycleSta
   if (has("run_local_llm_extraction")) {
     return {
       running: true,
+      searchRunning,
       phase: "scoring",
       detail: "Scoring the postings that were found against your resume.",
       startedAt,
@@ -336,6 +349,7 @@ export async function getApplyCycleStatus(userId: string): Promise<ApplyCycleSta
   if (has("find_matching_jobs")) {
     return {
       running: true,
+      searchRunning,
       phase: "searching",
       detail: "Searching Indeed and Dice for postings that fit your active role.",
       startedAt,
@@ -348,6 +362,7 @@ export async function getApplyCycleStatus(userId: string): Promise<ApplyCycleSta
   if (applyPhase) {
     return {
       running: true,
+      searchRunning,
       phase: "waiting",
       detail: "Discovery finished. The apply step is scheduled and will start on its own.",
       startedAt,
@@ -358,6 +373,7 @@ export async function getApplyCycleStatus(userId: string): Promise<ApplyCycleSta
 
   return {
     running: true,
+    searchRunning,
     phase: "queued",
     detail: "Queued. The worker picks this up on its next poll — make sure it is running.",
     startedAt,

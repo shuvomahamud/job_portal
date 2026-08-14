@@ -13,6 +13,7 @@ import { MAX_APPLICATIONS_PER_RUN } from "@/lib/runLimits";
 
 type Status = {
   running: boolean;
+  searchRunning: boolean;
   phase: "queued" | "searching" | "scoring" | "waiting" | "applying" | "failed" | "idle";
   detail: string;
   startedAt: string | null;
@@ -158,7 +159,7 @@ export function ApplyCycleControl({
     });
   }
 
-  const busy = pending || status.running;
+  const busy = pending || status.searchRunning;
 
   return (
     <section className="panel mb-6 p-5 sm:p-7">
@@ -280,9 +281,10 @@ export function ApplyCycleControl({
             </label>
           </fieldset>
 
-          {status.running ? (
-            // Deliberately the only button while a cycle is in flight: starting a second
-            // one would apply to the same jobs twice.
+          {status.searchRunning ? (
+            // Swapped on the search alone. Scoring and applying run continuously now, so
+            // keying this off "anything running" would hide Run permanently — and Stop
+            // only stops searching anyway.
             <button
               className="primary-button"
               type="button"
@@ -295,7 +297,7 @@ export function ApplyCycleControl({
                 </>
               ) : (
                 <>
-                  <Square className="size-4" /> Stop cycle
+                  <Square className="size-4" /> Stop search
                 </>
               )}
             </button>

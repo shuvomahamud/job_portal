@@ -30,7 +30,7 @@ import { FOLLOWUP_STATUSES } from "@/lib/constants";
 import { isResumeHealthyForActivation } from "@/lib/resumeHealth";
 import { MAX_APPLICATIONS_PER_RUN } from "@/lib/runLimits";
 import { followupUpdateSchema } from "@/lib/validation";
-import { cancelApplyCycle, hasApplyCycleInFlight } from "@/services/applyCycle";
+import { cancelSearch, hasApplyCycleInFlight } from "@/services/applyCycle";
 import { cancelCommand, createCommand, getCommandDetail } from "@/services/commands";
 
 const requiredString = (formData: FormData, key: string) =>
@@ -619,27 +619,35 @@ export async function startApplyCycle(options?: {
 }
 
 /**
- * Stops the running apply cycle.
+ * Stops searching for new jobs. Nothing else.
  *
- * The worker polls command status at its own checkpoints, so this marks the work canceled
- * and the worker stands down when it next looks — it is not a kill switch for the browser
- * that is open right now.
+ * Scoring and applying keep running deliberately: they are working through postings that
+ * are already found, which is exactly what should continue once you decide you have enough
+ * of them. Quitting the worker from the Mac app is what stops everything.
+ *
+ * The worker polls command status at its own checkpoints, so this marks the search
+ * canceled and it stands down when it next looks — not a kill switch for the browser
+ * open right now.
  */
 export async function stopApplyCycle(): Promise<{ ok: boolean; message: string }> {
   const user = await requireDashboardUser();
-  const { canceled, steps } = await cancelApplyCycle(user.id);
+
+  const { canceled, steps } = await cancelSearch(user.id);
 
   revalidatePath("/applications");
   revalidatePath("/commands");
 
   if (!canceled) {
-    return { ok: false, message: "Nothing is running, so there was nothing to stop." };
+    return {
+      ok: true,
+      message: "No search was running. Scoring and applying continue on their own.",
+    };
   }
 
   const unique = [...new Set(steps)].join(", ");
   return {
     ok: true,
-    message: `Stopping ${canceled} step(s): ${unique}. The worker finishes what it is in the middle of and stands down, usually within a minute.`,
+    message: `Stopped the search (${canceled} step(s): ${unique}). Scoring and applying carry on with the postings already found.`,
   };
 }
 
