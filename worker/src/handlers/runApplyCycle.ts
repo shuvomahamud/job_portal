@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { and, desc, eq, inArray, notExists, or } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import * as schema from "../../../src/db/schema";
 import { getConfig } from "../config";
 import {
@@ -13,11 +13,7 @@ import {
 } from "../db";
 import { requireCommandUserId } from "../requireCommandUserId";
 import type { HandlerContext, HandlerResult } from "../types";
-import {
-  ELIGIBLE_ROLE_MATCH_STATUS,
-  isApplyPaused,
-  selectJobsWithinRunLimits,
-} from "../apply/applyEligibility";
+import { isApplyPaused } from "../apply/applyEligibility";
 import { discoveryTargetFor } from "../search/discoveryLimits";
 import {
   MAX_APPLICATIONS_PER_RUN,
@@ -38,22 +34,6 @@ const payloadSchema = z
   .strict();
 
 const ALL_SOURCES = ["indeed", "dice"] as const;
-
-/** Retries allowed while discovery and scoring finish. Bounded by the payload schema. */
-export const APPLY_WAIT_MAX_ATTEMPTS = 20;
-
-/**
- * How long the apply phase waits before checking on discovery and scoring again.
- *
- * Backs off from one minute to five. A flat ten-minute poll meant a search that finished
- * seconds after a check cost another ten idle minutes; a flat one-minute poll would have
- * been worse in the other direction, giving up after six minutes when scoring alone takes
- * half an hour. Escalating keeps a fast run responsive while still waiting out a slow one
- * for roughly an hour and a half.
- */
-export function applyWaitDelayMs(attempt: number): number {
-  return Math.min(60_000 * (attempt + 1), 300_000);
-}
 
 export async function handleRunApplyCycle(
   payload: unknown,
@@ -135,172 +115,36 @@ export async function handleRunApplyCycle(
       }
     }
 
-    const applyChild = await createWorkerChildCommand({
-      parentCommandId: context.command.id,
-      type: "run_apply_cycle",
-      requestedBy: userId,
-      payloadJson: {
-        phase: "apply",
-        maxJobs: input.maxJobs ?? cfg.JOB_APPLY_MAX_PER_RUN,
-        mode: input.mode ?? cfg.JOB_APPLY_MODE,
-        // Carried through so the apply phase only considers jobs from the chosen boards.
-        sources: input.sources,
-        matchingCommandIds,
-        attempt: 0,
-        parentCommandId: context.command.id,
-      },
-      priority: "normal",
-      // A first check a minute out, not twenty. The apply phase re-checks whether
-      // discovery and scoring have finished and reschedules itself if not, so this delay
-      // was never a wait for anything — just a guess that cost twenty idle minutes on
-      // every run, however fast the search had actually been.
-      scheduledFor: new Date(Date.now() + 60 * 1000),
-    });
-
+    // No apply phase is scheduled any more. Nothing needs to guess when scoring will be
+    // done, because the applier is not waiting for a signal — it asks the database what is
+    // eligible and unapplied, and a posting scored a moment ago is simply in that answer.
     await addCommandEvent(
       context.command.id,
       "apply_cycle_discover_queued",
-      `Queued ${matchingCommandIds.length} matching command(s); apply phase scheduled.`,
-      { matchingCommandIds, applyCommandId: applyChild.id },
+      `Queued ${matchingCommandIds.length} search command(s). Scoring and applying follow on their own.`,
+      { matchingCommandIds },
     );
 
     return {
       phase,
       matchingCommandIds,
-      applyCommandId: applyChild.id,
-      message: `Discover phase queued ${matchingCommandIds.length} role match command(s).`,
+      message: `Searching. ${matchingCommandIds.length} command(s) queued; scoring and applying continue on their own.`,
     };
   }
 
-  const attempt = input.attempt ?? 0;
-  const matchingCommandIds = input.matchingCommandIds ?? [];
-  if (matchingCommandIds.length && attempt < APPLY_WAIT_MAX_ATTEMPTS) {
-    const children = await database
-      .select({ id: schema.commands.id, status: schema.commands.status })
-      .from(schema.commands)
-      .where(
-        or(
-          inArray(schema.commands.id, matchingCommandIds),
-          and(
-            eq(schema.commands.type, "run_local_llm_extraction"),
-            inArray(schema.commands.parentCommandId, matchingCommandIds),
-          ),
-        ),
-      );
-    const stillRunning = children.some((child) =>
-      ["pending", "claimed"].includes(child.status),
-    );
-    const failed = children.some((child) => child.status === "failed");
-    if (failed) {
-      return {
-        phase,
-        jobIds: [],
-        message: "Discovery or scoring failed, so this cycle will not apply to stale jobs. Resolve the reported issue and start a new run.",
-      };
-    }
-    if (stillRunning) {
-      const retry = await createWorkerChildCommand({
-        parentCommandId: input.parentCommandId ?? context.command.id,
-        type: "run_apply_cycle",
-        requestedBy: userId,
-        payloadJson: {
-          phase: "apply",
-          maxJobs: input.maxJobs,
-          mode: input.mode,
-          // Must be carried through, or a deferred retry silently widens back to all boards.
-          sources: input.sources,
-          matchingCommandIds,
-          attempt: attempt + 1,
-          parentCommandId: input.parentCommandId ?? context.command.id,
-        },
-        priority: "normal",
-        scheduledFor: new Date(Date.now() + applyWaitDelayMs(attempt)),
-      });
-      return {
-        phase,
-        deferred: true,
-        attempt,
-        retryCommandId: retry.id,
-        message: "Matching children still running; apply phase rescheduled.",
-      };
-    }
-  }
-
-  // Same rule as the discover phase: the run's own number wins, the config is the default.
-  const maxApplicationsPerRun = input.maxJobs ?? cfg.JOB_APPLY_MAX_PER_RUN;
-
-  const selectedSources = input.sources ?? [...ALL_SOURCES];
-
-  const eligible = await database
-    .select({
-      jobId: schema.jobRoleMatches.jobId,
-      score: schema.jobRoleMatches.score,
-      targetRoleId: schema.jobRoleMatches.targetRoleId,
-      source: schema.jobs.source,
-    })
-    .from(schema.jobRoleMatches)
-    .innerJoin(schema.jobs, eq(schema.jobs.id, schema.jobRoleMatches.jobId))
-    .innerJoin(schema.targetRoles, eq(schema.targetRoles.id, schema.jobRoleMatches.targetRoleId))
-    .where(
-      and(
-        eq(schema.jobRoleMatches.userId, userId),
-        eq(schema.jobRoleMatches.status, ELIGIBLE_ROLE_MATCH_STATUS),
-        eq(schema.targetRoles.active, true),
-        inArray(schema.jobs.source, selectedSources),
-        notExists(
-          database
-            .select({ id: schema.applications.id })
-            .from(schema.applications)
-            .where(
-              and(
-                eq(schema.applications.jobId, schema.jobRoleMatches.jobId),
-                eq(schema.applications.userId, userId),
-              ),
-            ),
-        ),
-      ),
-    )
-    .orderBy(desc(schema.jobRoleMatches.score))
-    .limit(maxApplicationsPerRun * 10);
-
-  const jobIds = selectJobsWithinRunLimits(
-    eligible,
-    maxApplicationsPerRun,
-    selectedSources,
-  );
-
-  if (!jobIds.length) {
-    return {
-      phase,
-      jobIds: [],
-      message: "No eligible job_role_matches without an application row.",
-    };
-  }
-
-  const applyCommand = await createWorkerChildCommand({
-    parentCommandId: context.command.id,
-    type: "apply_to_jobs",
-    requestedBy: userId,
-    payloadJson: {
-      jobIds,
-      mode: input.mode ?? cfg.JOB_APPLY_MODE,
-      maxJobs: maxApplicationsPerRun,
-    },
-    priority: "high",
-  });
-
-  await addCommandEvent(
-    context.command.id,
-    "apply_cycle_apply_queued",
-    `Queued apply_to_jobs for ${jobIds.length} job(s), with a run limit of ${maxApplicationsPerRun}.`,
-    { applyCommandId: applyCommand.id, jobIds, maxApplicationsPerRun },
-  );
-
+  // Everything below the discover phase used to live here: waiting for scoring to
+  // finish, deferring, re-checking, then selecting jobs and queueing an apply run. The
+  // applier now asks the database directly what is eligible and unapplied, so none of
+  // that coordination has anything left to coordinate.
+  //
+  // The phase is kept, rather than removed from the schema, so apply-phase commands
+  // already sitting in the queue when this shipped retire quietly instead of failing
+  // validation on a payload the handler no longer understands.
   return {
     phase,
-    jobIds,
-    applyCommandId: applyCommand.id,
-    message: `Apply phase queued ${jobIds.length} job(s); this run stops after at most ${maxApplicationsPerRun}.`,
+    retired: true,
+    message:
+      "The apply phase is no longer used; applications are queued by the applier as soon as postings become eligible.",
   };
 }
 

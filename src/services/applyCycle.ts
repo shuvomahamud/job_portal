@@ -18,6 +18,16 @@ const CYCLE_TYPES = [
   "apply_to_jobs",
 ] as const;
 
+/**
+ * The subset that means "a search is already under way".
+ *
+ * Only these should stop a new search being started. Scoring and applying now run
+ * continuously off the back of whatever is in the database, so counting them would leave
+ * the button disabled almost permanently — the very thing it exists to prevent is two
+ * searches at once, not a search while the model happens to be busy.
+ */
+const SEARCH_TYPES = ["run_apply_cycle", "find_matching_jobs"] as const;
+
 const IN_FLIGHT = ["pending", "claimed"] as const;
 
 export type ApplyCyclePhase =
@@ -98,7 +108,7 @@ export async function hasApplyCycleInFlight(userId: string): Promise<boolean> {
     .where(
       and(
         eq(commands.requestedBy, userId),
-        inArray(commands.type, [...CYCLE_TYPES]),
+        inArray(commands.type, [...SEARCH_TYPES]),
         inArray(commands.status, [...IN_FLIGHT]),
       ),
     )

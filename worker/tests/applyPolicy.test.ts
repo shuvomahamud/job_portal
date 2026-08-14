@@ -15,10 +15,6 @@ import {
 } from "../src/apply/humanInput";
 import { isExternalAts, sourceUrlAllowed } from "../src/apply/applySteps";
 import {
-  APPLY_WAIT_MAX_ATTEMPTS,
-  applyWaitDelayMs,
-} from "../src/handlers/runApplyCycle";
-import {
   ELIGIBLE_ROLE_MATCH_STATUS,
   selectJobsWithinRunLimits,
 } from "../src/apply/applyEligibility";
@@ -263,19 +259,8 @@ test("in-form pacing still leaves a page time to react", () => {
   assert.ok(preSubmitDelayMs(fastest) >= 500, "late validation can surface before submit");
 });
 
-test("waiting for discovery backs off instead of polling flat", () => {
-  // A flat one-minute poll would exhaust its 20 attempts in 20 minutes, while scoring
-  // alone takes over half an hour — the apply phase would give up on its own children.
-  assert.equal(applyWaitDelayMs(0), 60_000, "first check comes quickly");
-  assert.equal(applyWaitDelayMs(4), 300_000);
-  assert.equal(applyWaitDelayMs(50), 300_000, "capped");
-
-  let total = 0;
-  for (let attempt = 0; attempt < APPLY_WAIT_MAX_ATTEMPTS; attempt += 1) {
-    total += applyWaitDelayMs(attempt);
-  }
-  assert.ok(total >= 60 * 60_000, `only waits ${Math.round(total / 60_000)} min before giving up`);
-});
+// The apply phase and its backoff are gone: nothing waits for scoring to finish, because
+// the applier asks the database what is eligible rather than being handed a list.
 
 test("external ATS detection and source URL allow-list", () => {
   assert.equal(isExternalAts("https://boards.greenhouse.io/x", ["indeed.com"]).external, true);
