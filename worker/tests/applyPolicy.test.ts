@@ -15,6 +15,10 @@ import {
 } from "../src/apply/humanInput";
 import { isExternalAts, sourceUrlAllowed } from "../src/apply/applySteps";
 import {
+  APPLY_WAIT_MAX_ATTEMPTS,
+  applyWaitDelayMs,
+} from "../src/handlers/runApplyCycle";
+import {
   ELIGIBLE_ROLE_MATCH_STATUS,
   selectJobsWithinRunLimits,
 } from "../src/apply/applyEligibility";
@@ -242,11 +246,35 @@ test("decideFieldAction asks before filling an incompatible option", () => {
 
 test("seeded human delays stay in documented ranges", () => {
   const rng = () => 0;
-  assert.equal(typingDelayMs(rng), 45);
-  assert.equal(interFieldDelayMs(rng), 700);
-  assert.equal(preSubmitDelayMs(rng), 3000);
-  assert.equal(readingDelayMs(180, rng) <= 12_000, true);
-  assert.equal(betweenApplicationsMs(90, 420, rng), 90_000);
+  assert.equal(typingDelayMs(rng), 15);
+  assert.equal(interFieldDelayMs(rng), 200);
+  assert.equal(preSubmitDelayMs(rng), 800);
+  assert.equal(readingDelayMs(180, rng) <= 2_500, true);
+  assert.equal(betweenApplicationsMs(15, 45, rng), 15_000);
+});
+
+test("in-form pacing still leaves a page time to react", () => {
+  // These are not for looking human — they are what stops a debounced validator or an
+  // async dropdown from missing a value and submitting a silently empty field. Cutting
+  // them to zero would be faster and would quietly break real applications.
+  const fastest = () => 0;
+  assert.ok(interFieldDelayMs(fastest) >= 150, "a field always gets a moment to settle");
+  assert.ok(readingDelayMs(1, fastest) >= 250, "a page always gets a moment to settle");
+  assert.ok(preSubmitDelayMs(fastest) >= 500, "late validation can surface before submit");
+});
+
+test("waiting for discovery backs off instead of polling flat", () => {
+  // A flat one-minute poll would exhaust its 20 attempts in 20 minutes, while scoring
+  // alone takes over half an hour — the apply phase would give up on its own children.
+  assert.equal(applyWaitDelayMs(0), 60_000, "first check comes quickly");
+  assert.equal(applyWaitDelayMs(4), 300_000);
+  assert.equal(applyWaitDelayMs(50), 300_000, "capped");
+
+  let total = 0;
+  for (let attempt = 0; attempt < APPLY_WAIT_MAX_ATTEMPTS; attempt += 1) {
+    total += applyWaitDelayMs(attempt);
+  }
+  assert.ok(total >= 60 * 60_000, `only waits ${Math.round(total / 60_000)} min before giving up`);
 });
 
 test("external ATS detection and source URL allow-list", () => {

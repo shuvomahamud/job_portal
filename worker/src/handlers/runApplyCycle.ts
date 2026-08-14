@@ -38,6 +38,22 @@ const payloadSchema = z
 
 const ALL_SOURCES = ["indeed", "dice"] as const;
 
+/** Retries allowed while discovery and scoring finish. Bounded by the payload schema. */
+export const APPLY_WAIT_MAX_ATTEMPTS = 20;
+
+/**
+ * How long the apply phase waits before checking on discovery and scoring again.
+ *
+ * Backs off from one minute to five. A flat ten-minute poll meant a search that finished
+ * seconds after a check cost another ten idle minutes; a flat one-minute poll would have
+ * been worse in the other direction, giving up after six minutes when scoring alone takes
+ * half an hour. Escalating keeps a fast run responsive while still waiting out a slow one
+ * for roughly an hour and a half.
+ */
+export function applyWaitDelayMs(attempt: number): number {
+  return Math.min(60_000 * (attempt + 1), 300_000);
+}
+
 export async function handleRunApplyCycle(
   payload: unknown,
   context: HandlerContext,
@@ -139,7 +155,11 @@ export async function handleRunApplyCycle(
         parentCommandId: context.command.id,
       },
       priority: "normal",
-      scheduledFor: new Date(Date.now() + 20 * 60 * 1000),
+      // A first check a minute out, not twenty. The apply phase re-checks whether
+      // discovery and scoring have finished and reschedules itself if not, so this delay
+      // was never a wait for anything — just a guess that cost twenty idle minutes on
+      // every run, however fast the search had actually been.
+      scheduledFor: new Date(Date.now() + 60 * 1000),
     });
 
     await addCommandEvent(
@@ -159,7 +179,7 @@ export async function handleRunApplyCycle(
 
   const attempt = input.attempt ?? 0;
   const matchingCommandIds = input.matchingCommandIds ?? [];
-  if (matchingCommandIds.length && attempt < 6) {
+  if (matchingCommandIds.length && attempt < APPLY_WAIT_MAX_ATTEMPTS) {
     const children = await database
       .select({ id: schema.commands.id, status: schema.commands.status })
       .from(schema.commands)
@@ -199,7 +219,7 @@ export async function handleRunApplyCycle(
           parentCommandId: input.parentCommandId ?? context.command.id,
         },
         priority: "normal",
-        scheduledFor: new Date(Date.now() + 10 * 60 * 1000),
+        scheduledFor: new Date(Date.now() + applyWaitDelayMs(attempt)),
       });
       return {
         phase,

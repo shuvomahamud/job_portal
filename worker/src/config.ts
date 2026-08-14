@@ -49,9 +49,14 @@ const envSchema = z.object({
   JOB_BROWSER_DISCOVERY_ENABLED: boolFromEnv(false),
   JOB_BROWSER_USER_DATA_DIR: z.string().min(1).default("/home/shuvo/.job-worker-browser-profile"),
   JOB_BROWSER_HEADLESS: boolFromEnv(false),
-  JOB_BROWSER_MIN_DELAY_MS: intFromEnv(15000, 5000, 120000),
-  JOB_BROWSER_MAX_DELAY_MS: intFromEnv(45000, 5000, 180000),
-  JOB_BROWSER_SLOW_MO_MS: intFromEnv(500, 0, 5000),
+  // Paced like someone reading a results page, not someone wandering off. The old
+  // 15-45s floor was the sole reason discovery hit its 30-minute cap instead of running
+  // out of postings, so it capped how many jobs a run could ever find.
+  JOB_BROWSER_MIN_DELAY_MS: intFromEnv(4000, 1000, 120000),
+  JOB_BROWSER_MAX_DELAY_MS: intFromEnv(10000, 1000, 180000),
+  // Added to every single Playwright action, so it compounds hard across a form with
+  // dozens of interactions. Playwright still waits for actionability on its own.
+  JOB_BROWSER_SLOW_MO_MS: intFromEnv(100, 0, 5000),
   JOB_BROWSER_NAVIGATION_TIMEOUT_MS: intFromEnv(60000, 10000, 180000),
   // Ceiling for one discovery command. Kept high enough not to strangle a large apply
   // run: the cycle asks for roughly twice its apply target, and a 25 cap silently
@@ -99,8 +104,11 @@ const envSchema = z.object({
   JOB_APPLY_MAX_PER_RUN: intFromEnv(15, 1, 1000),
   JOB_APPLY_MAX_MINUTES_PER_APPLICATION: intFromEnv(20, 1, 120),
   JOB_APPLY_MAX_STEPS: intFromEnv(8, 1, 20),
-  JOB_APPLY_MIN_GAP_SECONDS: intFromEnv(90, 0, 3600),
-  JOB_APPLY_MAX_GAP_SECONDS: intFromEnv(420, 0, 7200),
+  // Dead time between applications: no quality value at all, and it was roughly three
+  // and a half hours of a fifty-job run. A person applying seriously moves straight to
+  // the next posting rather than pausing four minutes.
+  JOB_APPLY_MIN_GAP_SECONDS: intFromEnv(15, 0, 3600),
+  JOB_APPLY_MAX_GAP_SECONDS: intFromEnv(45, 0, 7200),
   JOB_APPLY_ARTIFACT_DIR: z.string().optional(),
   JOB_APPLY_TRACE: boolFromEnv(true),
   JOB_APPLY_TRUST_LLM_ANSWERS: boolFromEnv(false),
