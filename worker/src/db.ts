@@ -1,6 +1,6 @@
 import { neon } from "@neondatabase/serverless";
 import { drizzle } from "drizzle-orm/neon-http";
-import { and, desc, eq, inArray, isNull, notInArray, or, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, notExists, notInArray, or, sql } from "drizzle-orm";
 import * as schema from "../../src/db/schema";
 import { getConfig } from "./config";
 import type { NormalizedJobInput, WorkerSpawnableCommandType } from "./types";
@@ -778,4 +778,45 @@ export async function archiveJobFromHardFilter(input: {
       .returning(),
   ]);
   return { review: reviewRows[0], job: jobRows[0] };
+}
+
+/**
+ * Jobs this role has never been scored against.
+ *
+ * Scoring is queued by a search command as its final act, so a search that is interrupted
+ * after saving postings but before that point strands them: nothing ever comes back for
+ * them, and an unscored job can never be applied to. Seventy-eight accumulated in a single
+ * evening of interrupted runs.
+ *
+ * Archived jobs are excluded — they were already judged, just not by this role.
+ */
+export async function getUnscoredJobIdsForRole(
+  userId: string,
+  targetRoleId: string,
+  limit: number,
+): Promise<string[]> {
+  const database = getWorkerDb();
+  const rows = await database
+    .select({ id: schema.jobs.id })
+    .from(schema.jobs)
+    .where(
+      and(
+        notInArray(schema.jobs.status, ["archived", "applied"]),
+        notExists(
+          database
+            .select({ id: schema.jobRoleMatches.id })
+            .from(schema.jobRoleMatches)
+            .where(
+              and(
+                eq(schema.jobRoleMatches.jobId, schema.jobs.id),
+                eq(schema.jobRoleMatches.userId, userId),
+                eq(schema.jobRoleMatches.targetRoleId, targetRoleId),
+              ),
+            ),
+        ),
+      ),
+    )
+    .orderBy(desc(schema.jobs.createdAt))
+    .limit(limit);
+  return rows.map((row) => row.id);
 }

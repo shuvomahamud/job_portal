@@ -7,6 +7,7 @@ import {
   createWorkerChildCommand,
   getActiveTargetRolesForUser,
   getCandidateProfileForUser,
+  getUnscoredJobIdsForRole,
   getWorkerDb,
 } from "../db";
 import { requireCommandUserId } from "../requireCommandUserId";
@@ -17,7 +18,10 @@ import {
   selectJobsWithinRunLimits,
 } from "../apply/applyEligibility";
 import { discoveryTargetFor } from "../search/discoveryLimits";
-import { MAX_APPLICATIONS_PER_RUN } from "../../../src/lib/runLimits";
+import {
+  MAX_APPLICATIONS_PER_RUN,
+  MAX_DISCOVERY_RESULTS_PER_COMMAND,
+} from "../../../src/lib/runLimits";
 
 const payloadSchema = z
   .object({
@@ -83,6 +87,41 @@ export async function handleRunApplyCycle(
         priority: "normal",
       });
       matchingCommandIds.push(child.id);
+
+      // Catch up on anything a previous run stranded. A search that is interrupted after
+      // saving postings but before queueing their scoring leaves them unscored forever —
+      // nothing else ever revisits them, and an unscored job can never be applied to.
+      if (profile) {
+        const stranded = await getUnscoredJobIdsForRole(
+          userId,
+          role.id,
+          MAX_DISCOVERY_RESULTS_PER_COMMAND,
+        );
+        if (stranded.length) {
+          const catchUp = await createWorkerChildCommand({
+            parentCommandId: context.command.id,
+            type: "run_local_llm_extraction",
+            requestedBy: userId,
+            payloadJson: {
+              parentCommandId: context.command.id,
+              candidateProfileId: profile.id,
+              jobIds: stranded,
+              promptVersion: "job-match-prompt-v1",
+              policyVersion: "job-match-policy-v2",
+              targetRoleId: role.id,
+              resumeVersionId: role.resumeVersionId,
+            },
+            priority: "normal",
+          });
+          matchingCommandIds.push(catchUp.id);
+          await addCommandEvent(
+            context.command.id,
+            "apply_cycle_scoring_catch_up",
+            `Queued scoring for ${stranded.length} posting(s) an earlier run left unscored.`,
+            { targetRoleId: role.id, jobCount: stranded.length, commandId: catchUp.id },
+          );
+        }
+      }
     }
 
     const applyChild = await createWorkerChildCommand({
