@@ -550,7 +550,7 @@ export async function dismissPendingQuestion(formData: FormData) {
 }
 
 /**
- * Starts an apply cycle, refusing when one is already in flight.
+ * Starts a job search, refusing when one is already in flight.
  *
  * Returns a result rather than throwing: a thrown server action renders the global error
  * page, which is why clicking this button used to look like nothing happened. Without the
@@ -576,7 +576,7 @@ export async function startApplyCycle(options?: {
   if (await hasApplyCycleInFlight(user.id)) {
     return {
       ok: false,
-      message: "An apply cycle is already running. Watch its progress below.",
+      message: "A job search is already running. Watch its progress below.",
     };
   }
 
@@ -614,7 +614,7 @@ export async function startApplyCycle(options?: {
       : ` Up to ${input.maxJobs} from ${input.sources[0]}.`;
   return {
     ok: true,
-    message: `Apply cycle started. Searching now — progress appears below.${split}`,
+    message: `Job search started. Scoring and applying follow on their own.${split}`,
   };
 }
 

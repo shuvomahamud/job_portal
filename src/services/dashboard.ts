@@ -116,7 +116,7 @@ export async function getDashboardSummary(userId: string) {
             : {
                 // The fallback used to point at "/" — this page — so the button did
                 // nothing. Running the pipeline lives on /applications.
-                label: "Run an apply cycle",
+                label: "Search for jobs",
                 detail: "Search, score and apply in one run",
                 href: "/applications",
               };

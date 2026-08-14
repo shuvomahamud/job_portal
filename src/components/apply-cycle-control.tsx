@@ -297,7 +297,7 @@ export function ApplyCycleControl({
                 </>
               ) : (
                 <>
-                  <Square className="size-4" /> Stop search
+                  <Square className="size-4" /> Stop job search
                 </>
               )}
             </button>
@@ -309,7 +309,7 @@ export function ApplyCycleControl({
                 </>
               ) : (
                 <>
-                  <Play className="size-4" /> Run apply cycle
+                  <Play className="size-4" /> Search jobs
                 </>
               )}
             </button>

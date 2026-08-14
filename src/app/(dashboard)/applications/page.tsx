@@ -134,7 +134,7 @@ export default async function ApplicationsPage({
       <section className="panel mb-6 p-5 sm:p-7">
         <SectionHeading
           title="Global apply control"
-          description="Pause all discovery-to-apply cycles and direct application commands for your account."
+          description="Pause all searching, scoring and applying for your account."
         />
         <form action={setApplyPaused.bind(null, !applyPaused)}>
           <button className={applyPaused ? "primary-button" : "secondary-button"} type="submit">
@@ -192,7 +192,7 @@ export default async function ApplicationsPage({
         {rows.length === 0 ? (
           <EmptyState
             title="No applications yet"
-            description="Queue an apply cycle or use Apply now on a ready job."
+            description="Search for jobs, or use Apply now on a ready job."
           />
         ) : (
           <div className="space-y-4">

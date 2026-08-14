@@ -63,7 +63,7 @@ export default async function JobsPage({
         description={`${jobRows.length} role${jobRows.length === 1 ? "" : "s"} in this view. Filter the signal, then move the best work forward.`}
         action={
           <Link href="/applications" className="primary-button">
-            <SearchCheck className="size-4" /> Run apply cycle
+            <SearchCheck className="size-4" /> Search jobs
           </Link>
         }
       />
@@ -242,9 +242,9 @@ export default async function JobsPage({
         ) : (
           <EmptyState
             title="No jobs match this view"
-            description="Run an apply cycle to discover and evaluate real Indeed and Dice postings."
+            description="Search for jobs to discover and evaluate real Indeed and Dice postings."
             href="/applications"
-            action="Run apply cycle"
+            action="Search jobs"
           />
         )}
       </section>

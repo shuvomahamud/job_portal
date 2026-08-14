@@ -161,7 +161,7 @@ export async function cancelSearch(
       stopped.map((command) => ({
         commandId: command.id,
         eventType: "canceled",
-        message: "Apply cycle stopped from the dashboard.",
+        message: "Job search stopped from the dashboard.",
         metadataJson: { requestedBy: userId },
       })),
     );
@@ -309,7 +309,7 @@ export async function getApplyCycleStatus(userId: string): Promise<ApplyCycleSta
       running: false,
       searchRunning: false,
       phase: "idle",
-      detail: "No apply cycle is running.",
+      detail: "Idle. Nothing to search, score or apply to right now.",
       startedAt: null,
       nextApplyAt: null,
       ...common,
