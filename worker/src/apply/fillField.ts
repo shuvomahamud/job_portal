@@ -65,6 +65,13 @@ export async function fillDetectedField(
   const target = locator.first();
   await target.scrollIntoViewIfNeeded();
   await target.click();
+  // Clear before typing. Indeed pre-fills contact fields from the account's own profile,
+  // and typing on top of that appended instead of replacing: "Shuvo" + "Md Mahamudul
+  // Hasan" became "ShuvoMd Mahamudul Hasan", and the surname went out as "MahamudKhan".
+  //
+  // Every application that got past this page carried a mangled name to a real employer,
+  // which is worse than not applying at all.
+  await target.fill("").catch(() => undefined);
   await target.pressSequentially(value, { delay: human.typingDelayMs() });
 }
 

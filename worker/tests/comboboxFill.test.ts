@@ -89,3 +89,20 @@ test("a combobox with no matching row commits what was typed", async () => {
   await fillDetectedField(frame, field(), "Hoboken, NJ", human);
   assert.ok(calls.includes("press:Enter"), "editable comboboxes accept a typed value");
 });
+
+test("a pre-filled field is cleared before typing, not appended to", async () => {
+  // Indeed pre-fills contact fields from the account profile. Typing on top of that sent
+  // "ShuvoMd Mahamudul Hasan" and "MahamudKhan" to real employers — an application with a
+  // mangled name is worse than no application.
+  const { frame, calls } = fakeFrame([]);
+  await fillDetectedField(
+    frame,
+    field({ inputType: "text", tagName: "input", fieldCategory: "first_name", options: [] }),
+    "Md Mahamudul Hasan",
+    human,
+  );
+  const cleared = calls.indexOf("fill:");
+  const typed = calls.findIndex((c) => c.startsWith("type:"));
+  assert.ok(cleared >= 0, "the field is emptied first");
+  assert.ok(typed > cleared, "and only then typed into");
+});
