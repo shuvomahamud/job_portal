@@ -6,6 +6,7 @@
 
 import AppKit
 import Foundation
+import UniformTypeIdentifiers
 import UserNotifications
 
 let repoDir = "__REPO_DIR__"
@@ -1161,7 +1162,11 @@ final class MainWindowController: NSWindowController, NSTextFieldDelegate, NSTex
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
-        panel.allowedFileTypes = ["pdf", "docx"]
+        // allowedFileTypes has been deprecated since macOS 12. docx has no static UTType,
+        // so it is looked up by extension and dropped if the system does not know it —
+        // better than the panel refusing to open at all.
+        panel.allowedContentTypes = [UTType.pdf, UTType(filenameExtension: "docx")]
+            .compactMap { $0 }
         panel.prompt = "Add"
         guard panel.runModal() == .OK, let url = panel.url else { return }
 
