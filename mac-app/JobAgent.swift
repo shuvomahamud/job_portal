@@ -41,6 +41,11 @@ enum Key {
     static let applyMaxPerRun = "JOB_APPLY_MAX_PER_RUN"
     static let applyArtifacts = "JOB_APPLY_ARTIFACT_DIR"
 
+    // A macOS notification never leaves the Mac — Apple Watch mirrors the iPhone, not this
+    // machine. These send the same alerts to a phone through ntfy.
+    static let pushEnabled = "JOB_APPLY_PUSH_ENABLED"
+    static let ntfyTopic = "NTFY_TOPIC"
+
     static let resumeStore = "JOB_RESUME_STORE_DIR"
 }
 
@@ -793,6 +798,8 @@ final class MainWindowController: NSWindowController, NSTextFieldDelegate, NSTex
     private let applyModePopup = NSPopUpButton()
     private let applyRunLimitField = NSTextField()
     private let artifactsField = NSTextField()
+    private let pushEnabledSwitch = NSSwitch()
+    private let ntfyTopicField = NSTextField()
     private var commandBoxes: [String: NSButton] = [:]
     private let taskGrid = NSStackView()
     private let taskDisclosure = NSButton()
@@ -1131,7 +1138,8 @@ final class MainWindowController: NSWindowController, NSTextFieldDelegate, NSTex
         form.translatesAutoresizingMaskIntoConstraints = false
 
         for field in [dashboardField, databaseField, secretField, ownerField,
-                      profileField, ollamaURLField, ollamaModelField, applyRunLimitField, artifactsField] {
+                      profileField, ollamaURLField, ollamaModelField, applyRunLimitField, artifactsField,
+                      ntfyTopicField] {
             field.delegate = self
             field.translatesAutoresizingMaskIntoConstraints = false
             field.widthAnchor.constraint(equalToConstant: 420).isActive = true
@@ -1255,6 +1263,14 @@ final class MainWindowController: NSWindowController, NSTextFieldDelegate, NSTex
         artifactRow.spacing = 6
         form.addArrangedSubview(formRow("Screenshots folder", artifactRow))
 
+        form.addArrangedSubview(sectionHeader(
+            "Phone notifications",
+            subtitle: "A Mac notification stays on the Mac. Send them to your phone and watch too."
+        ))
+        form.addArrangedSubview(formRow("Notify my phone", switchRow(pushEnabledSwitch, "Send alerts through ntfy as well as to this Mac")))
+        form.addArrangedSubview(formRow("ntfy topic", ntfyTopicField,
+                                        hint: "Subscribe to this same topic in the ntfy app. Anyone who knows it can read your alerts, so make it long and unguessable."))
+
         scroll.documentView = form
 
         let save = NSButton(title: "Save Settings", target: self, action: #selector(saveTapped))
@@ -1326,10 +1342,12 @@ final class MainWindowController: NSWindowController, NSTextFieldDelegate, NSTex
         ollamaModelField.stringValue = config.get(Key.ollamaModel)
         applyRunLimitField.stringValue = config.get(Key.applyMaxPerRun)
         artifactsField.stringValue = config.get(Key.applyArtifacts)
+        ntfyTopicField.stringValue = config.get(Key.ntfyTopic)
 
         headlessSwitch.state = config.bool(Key.browserHeadless) ? .on : .off
         discoverySwitch.state = config.bool(Key.browserDiscovery) ? .on : .off
         applyEnabledSwitch.state = config.bool(Key.applyEnabled) ? .on : .off
+        pushEnabledSwitch.state = config.bool(Key.pushEnabled) ? .on : .off
         browserEnginePopup.selectItem(at: config.get(Key.browserChannel) == "bundled" ? 1 : 0)
 
         switch config.get(Key.applyMode) {
@@ -1360,10 +1378,12 @@ final class MainWindowController: NSWindowController, NSTextFieldDelegate, NSTex
         config.set(Key.ollamaModel, ollamaModelField.stringValue)
         config.set(Key.applyMaxPerRun, applyRunLimitField.stringValue)
         config.set(Key.applyArtifacts, artifactsField.stringValue)
+        config.set(Key.ntfyTopic, ntfyTopicField.stringValue)
 
         config.set(Key.browserHeadless, headlessSwitch.state == .on ? "true" : "false")
         config.set(Key.browserDiscovery, discoverySwitch.state == .on ? "true" : "false")
         config.set(Key.applyEnabled, applyEnabledSwitch.state == .on ? "true" : "false")
+        config.set(Key.pushEnabled, pushEnabledSwitch.state == .on ? "true" : "false")
         config.set(Key.browserChannel, browserEnginePopup.indexOfSelectedItem == 0 ? "chrome" : "bundled")
 
         switch applyModePopup.indexOfSelectedItem {
