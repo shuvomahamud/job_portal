@@ -976,3 +976,27 @@ export async function queueApplyRunIfIdle(input: {
     .returning();
   return command ?? null;
 }
+
+/**
+ * True when something is waiting on the user — a CAPTCHA, a login, a blocked browser.
+ *
+ * The self-driving applier has to consult this or it spins: an apply run stops on a
+ * challenge, the worker goes idle, sees the same eligible postings still unapplied, and
+ * queues another run straight back into the same wall. Every ten seconds, with a
+ * notification each time.
+ *
+ * "Ask for help and wait" is only actually waiting if something stops the retry.
+ */
+export async function hasOpenBlockerAlert(userId: string): Promise<boolean> {
+  const [row] = await getWorkerDb()
+    .select({ id: schema.automationAlerts.id })
+    .from(schema.automationAlerts)
+    .where(
+      and(
+        eq(schema.automationAlerts.userId, userId),
+        eq(schema.automationAlerts.status, "open"),
+      ),
+    )
+    .limit(1);
+  return Boolean(row);
+}

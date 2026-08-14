@@ -20,6 +20,7 @@ import {
   getActiveTargetRolesForUser,
   getCandidateProfileForUser,
   getEligibleUnappliedJobIds,
+  hasOpenBlockerAlert,
   getUnscoredJobIdsForRole,
   queueApplyRunIfIdle,
   queueScoringSweepIfIdle,
@@ -70,6 +71,18 @@ export async function queueImpliedWork(
           return { queued: "scoring" };
         }
       }
+    }
+
+    // Something is waiting on the user — a CAPTCHA, a login wall — so applying stands
+    // down rather than walking straight back into it. Without this the loop spins: the
+    // run stops on the challenge, the worker goes idle, the same postings are still
+    // unapplied, and it queues another run into the same wall every ten seconds, with a
+    // notification each time. Asking for help is only waiting if the retry stops.
+    //
+    // Scoring is deliberately left running: it needs no browser, so a blocked Chrome is
+    // no reason for the model to sit idle.
+    if (commandTypes.includes("apply_to_jobs") && (await hasOpenBlockerAlert(userId))) {
+      return { queued: null };
     }
 
     if (commandTypes.includes("apply_to_jobs") && cfg.JOB_APPLY_ENABLED) {
