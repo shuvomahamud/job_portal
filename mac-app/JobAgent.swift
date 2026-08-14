@@ -719,7 +719,15 @@ final class WorkerController {
     /// First call asks the worker to finish its current command and exit. Because an apply
     /// can legitimately run for many minutes, a second call kills it outright.
     func stop() {
-        guard let task = process else { return }
+        // Nothing to wait for. Without this the window could sit on "Stopping" for good
+        // after a worker exited some other way — a crash, or being killed from a terminal —
+        // because the button that clears the state needs a process to signal.
+        guard let task = process, task.isRunning else {
+            appendLog("--- worker already gone; clearing state ---")
+            process = nil
+            setState(.stopped)
+            return
+        }
         if state == .stopping {
             appendLog("--- force killing worker ---")
             kill(task.processIdentifier, SIGKILL)
@@ -735,6 +743,22 @@ final class WorkerController {
         // done. Left running it would keep claiming work after the user asked for a stop.
         if let scorer = scorerProcess, scorer.isRunning {
             kill(scorer.processIdentifier, SIGTERM)
+        }
+
+        // A graceful stop that never finishes is not graceful, it is stuck. The worker
+        // gives itself twenty seconds before exiting regardless; this waits a little
+        // longer than that and then insists, so the window can never be left on
+        // "Stopping" with Start disabled and nothing the user can do about it.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 30) { [weak self] in
+            guard let self, self.state == .stopping else { return }
+            if let running = self.process, running.isRunning {
+                self.appendLog("--- worker did not stop in time; force killing ---")
+                kill(running.processIdentifier, SIGKILL)
+            }
+            if let scorer = self.scorerProcess, scorer.isRunning {
+                kill(scorer.processIdentifier, SIGKILL)
+            }
+            self.setState(.stopped)
         }
     }
 

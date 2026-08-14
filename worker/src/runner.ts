@@ -11,14 +11,38 @@ import type { DashboardCommand } from "./types";
 
 let stopping = false;
 
-process.on("SIGINT", () => {
+/** How long a graceful stop may take before the process leaves anyway. */
+const STOP_DEADLINE_MS = 20_000;
+
+/**
+ * Setting a flag was not enough to stop this process.
+ *
+ * The loop only reads `stopping` between commands, so a signal arriving while the worker
+ * sits inside a browser call — Playwright's own timeouts run to a minute or more — was
+ * simply not acted on. The Mac app then waited on a process that acknowledged the signal
+ * and never left, and its Start button stayed disabled for as long as that lasted.
+ *
+ * So a stop is now a promise rather than a request: the flag first, and if the process is
+ * still here when the deadline passes it exits regardless. A second signal skips the wait
+ * entirely, which is what makes Force Stop mean anything.
+ */
+function requestStop(signal: string) {
+  if (stopping) {
+    logger.warn(`Received ${signal} again; exiting now.`);
+    process.exit(0);
+  }
   stopping = true;
-  logger.warn("Received SIGINT; stopping after current command.");
-});
-process.on("SIGTERM", () => {
-  stopping = true;
-  logger.warn("Received SIGTERM; stopping after current command.");
-});
+  logger.warn(`Received ${signal}; stopping after current command.`);
+  const deadline = setTimeout(() => {
+    logger.warn("Graceful stop timed out; exiting.", { afterMs: STOP_DEADLINE_MS });
+    process.exit(0);
+  }, STOP_DEADLINE_MS);
+  // Never hold the process open on the timer's account.
+  deadline.unref();
+}
+
+process.on("SIGINT", () => requestStop("SIGINT"));
+process.on("SIGTERM", () => requestStop("SIGTERM"));
 
 /** Best-effort: if this check itself fails, fall back to normal failure reporting. */
 async function wasCanceled(commandId: string): Promise<boolean> {
