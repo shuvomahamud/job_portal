@@ -8,6 +8,11 @@ export function comparableOption(value: string): string {
   );
 }
 
+/** Phone-country rows are often "United States+1". The saved answer is just the country. */
+export function withoutPhoneDialCode(value: string): string {
+  return comparableOption(value.replace(/\+\d+\s*$/g, ""));
+}
+
 export function optionMatches(options: string[], answer: string): boolean {
   const targets = answer
     .split(",")
@@ -38,6 +43,12 @@ export function bestOptionIndex(options: string[], desired: string): number {
     .map((item) => item.index);
   if (exactIndexes.length === 1) return exactIndexes[0]!;
   if (exactIndexes.length > 1) return -1;
+
+  const diallessIndexes = options
+    .map((option, index) => ({ option: withoutPhoneDialCode(option), index }))
+    .filter((item) => item.option === target || item.option === withoutPhoneDialCode(desired))
+    .map((item) => item.index);
+  if (diallessIndexes.length === 1) return diallessIndexes[0]!;
 
   const fuzzy = options
     .map((option, index) => ({ option: comparableOption(option), index }))

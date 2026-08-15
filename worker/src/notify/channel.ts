@@ -58,6 +58,14 @@ export function formatBrowserBlockedTitle(kind: NotifyBrowserBlockedInput["kind"
   return "Job site blocked the worker";
 }
 
+export function formatBrowserBlockedBody(input: NotifyBrowserBlockedInput): string {
+  const next =
+    input.kind === "access_denied"
+      ? "Open the dashboard and choose “Open browser to unblock”."
+      : "Solve it in JobAgent Chrome, then click Resume automated apply.";
+  return `${input.message}\n${next}`;
+}
+
 export function formatQuestionsTitle(input: NotifyQuestionsInput): string {
   const count = input.questions.length;
   if (count === 1) {

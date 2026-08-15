@@ -141,7 +141,9 @@ export default async function ApplicationsPage({
             {applyPaused ? "Resume automated apply" : "Pause automated apply"}
           </button>
           <span className="ml-3 text-sm text-[var(--muted)]">
-            Currently {applyPaused ? "paused" : "running when enabled on the worker"}
+            {applyPaused
+              ? "Paused. If a CAPTCHA or login is on screen, solve it in JobAgent Chrome, then resume to continue from that page."
+              : "Currently running when enabled on the worker"}
           </span>
         </form>
       </section>

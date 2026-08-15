@@ -127,11 +127,23 @@ test("a control that abandons the application is never treated as progress", asy
     advances: false,
     isTerminalSubmit: false,
   });
+  assert.deepEqual(classifyControlLabel("Preview next page"), {
+    advances: false,
+    isTerminalSubmit: false,
+  });
 });
 
 test("finishing is told apart from advancing", async () => {
   const { classifyControlLabel } = await import("../src/apply/external/controlLocator.js");
   assert.deepEqual(classifyControlLabel("Submit application"), {
+    advances: true,
+    isTerminalSubmit: true,
+  });
+  assert.deepEqual(classifyControlLabel("Submit your application"), {
+    advances: true,
+    isTerminalSubmit: true,
+  });
+  assert.deepEqual(classifyControlLabel("Submit my application"), {
     advances: true,
     isTerminalSubmit: true,
   });

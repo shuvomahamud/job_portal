@@ -48,6 +48,11 @@ test("explicit human-verification wording is still caught", async () => {
   assert.equal(result.blocked, true);
 });
 
+test("I'm not a robot on submit is a challenge", async () => {
+  const result = await indeed.detectBlocked(fakePage("Submit your application. I'm not a robot"));
+  assert.equal(result.blocked, true);
+});
+
 test("an access-denied wall is still caught", async () => {
   const result = await indeed.detectBlocked(
     fakePage("Access Denied. You do not have permission to view this page."),

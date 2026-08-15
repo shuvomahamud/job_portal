@@ -48,6 +48,10 @@ export type FrameLike = {
   isDetached(): boolean;
 };
 
+export type FileChooserLike = {
+  setFiles(files: string | string[]): Promise<void>;
+};
+
 export type PageLike = FrameLike & {
   goto(url: string, options: Record<string, unknown>): Promise<unknown>;
   waitForTimeout(ms: number): Promise<void>;
@@ -55,6 +59,10 @@ export type PageLike = FrameLike & {
     state?: "load" | "domcontentloaded" | "networkidle",
     options?: { timeout?: number },
   ): Promise<void>;
+  waitForEvent?(
+    event: "filechooser",
+    options?: { timeout?: number },
+  ): Promise<FileChooserLike>;
   frames(): FrameLike[];
   mainFrame(): FrameLike;
   screenshot(options: { path: string; fullPage?: boolean }): Promise<Buffer>;

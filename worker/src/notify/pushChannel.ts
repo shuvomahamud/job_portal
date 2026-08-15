@@ -13,6 +13,7 @@ import {
   formatQuestionsBody,
   formatQuestionsTitle,
   formatBrowserBlockedTitle,
+  formatBrowserBlockedBody,
   type NotificationChannel,
   type NotifyAnswerAcceptedInput,
   type NotifyQuestionsInput,
@@ -99,7 +100,7 @@ export function createPushChannel(options: PushChannelOptions): NotificationChan
       // the browser is holding the challenge open waiting for a person.
       await publish(
         formatBrowserBlockedTitle(input.kind),
-        `${input.message}\n\nThe browser is waiting on your Mac with the challenge open. Solve it there, then resume the run.`,
+        formatBrowserBlockedBody(input),
         5,
         ["rotating_light"],
       );

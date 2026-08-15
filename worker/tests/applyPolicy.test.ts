@@ -185,6 +185,63 @@ test("candidate-authorized contractor sponsorship answer may fill", () => {
   assert.deepEqual(action, { kind: "fill", value: "No", source: "rule" });
 });
 
+test("a profile city must not fill a historical resume-card location", () => {
+  const action = decideFieldAction({
+    field: field({
+      fieldCategory: "city",
+      labelText: "Location for Senior Software Engineer FiftyTwo Digital",
+      normalizedQuestion: "location senior software engineer fiftytwo digital",
+      nearbyText: "work FiftyTwo Digital",
+      confidence: 0.93,
+    }),
+    match: {
+      fieldId: "f1",
+      savedAnswerId: "profile:city",
+      matchType: "rule",
+      confidence: 0.93,
+      reason: "category",
+      requiresReview: false,
+    },
+    savedAnswer: answer({
+      id: "profile:city",
+      category: "city",
+      answerValue: "South Richmond Hill",
+    }),
+    suggestedValue: "South Richmond Hill",
+    trustLlmAnswers: false,
+  });
+  assert.equal(action.kind, "ask");
+});
+
+test("a saved answer for that specific resume entry may fill", () => {
+  const action = decideFieldAction({
+    field: field({
+      fieldCategory: "city",
+      labelText: "Location for Senior Software Engineer FiftyTwo Digital",
+      normalizedQuestion: "location senior software engineer fiftytwo digital",
+      nearbyText: "work FiftyTwo Digital",
+      confidence: 0.93,
+    }),
+    match: {
+      fieldId: "f1",
+      savedAnswerId: "a-fiftytwo",
+      matchType: "exact",
+      confidence: 0.99,
+      reason: "exact",
+      requiresReview: false,
+    },
+    savedAnswer: answer({
+      id: "a-fiftytwo",
+      category: "city",
+      answerValue: "Remote",
+      normalizedQuestion: "location senior software engineer fiftytwo digital",
+    }),
+    suggestedValue: "Remote",
+    trustLlmAnswers: false,
+  });
+  assert.deepEqual(action, { kind: "fill", value: "Remote", source: "exact" });
+});
+
 test("decideFieldAction fills exact low-risk matches", () => {
   const action = decideFieldAction({
     field: field(),

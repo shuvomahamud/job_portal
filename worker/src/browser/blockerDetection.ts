@@ -19,7 +19,7 @@ export class BrowserInterventionRequiredError extends Error {
 }
 
 const CAPTCHA_TEXT =
-  /verify (?:that )?you are (?:a )?human|unusual traffic|security check|press and hold|complete the challenge|cloudflare ray id/i;
+  /verify (?:that )?you are (?:a )?human|unusual traffic|security check|press and hold|complete the challenge|cloudflare ray id|i['’]?m not a robot|i am not a robot|\bnot a robot\b/i;
 const ACCESS_DENIED_TEXT =
   /access denied|temporarily blocked|request blocked|automated traffic|forbidden|too many requests/i;
 const LOGIN_TEXT =
@@ -28,7 +28,16 @@ const LOGIN_URL = /\/(?:login|signin|sign-in|auth)(?:[/?#]|$)|secure\.indeed\.co
 
 async function hasVisibleChallengeElement(page: PageLike): Promise<boolean> {
   const candidates = page.locator(
-    'iframe[src*="recaptcha" i], iframe[src*="hcaptcha" i], iframe[src*="challenge" i], [data-sitekey], input[name="cf-turnstile-response"]',
+    [
+      'iframe[src*="recaptcha" i]',
+      'iframe[src*="google.com/recaptcha" i]',
+      'iframe[title*="recaptcha" i]',
+      'iframe[title*="not a robot" i]',
+      'iframe[src*="hcaptcha" i]',
+      'iframe[src*="challenge" i]',
+      "[data-sitekey]",
+      'input[name="cf-turnstile-response"]',
+    ].join(", "),
   );
   const count = await candidates.count().catch(() => 0);
   for (let index = 0; index < count; index += 1) {
@@ -75,7 +84,7 @@ export async function detectBrowserBlocker(
       kind: "captcha",
       site,
       pageUrl,
-      message: `${site === "unknown" ? "A job site" : site} needs a CAPTCHA or human verification solved in the worker browser.`,
+      message: `${site === "unknown" ? "A job site" : site} needs a CAPTCHA solved. The apply is paused on that page — finish it in JobAgent Chrome, then click Resume automated apply.`,
       evidence: visibleCaptcha ? "Visible CAPTCHA/challenge element detected." : "Human-verification text detected.",
     };
   }
@@ -95,10 +104,15 @@ export async function detectBrowserBlocker(
       kind: "login_required",
       site,
       pageUrl,
-      message: `${site === "unknown" ? "A job site" : site} requires you to log in again.`,
+      message: `${site === "unknown" ? "A job site" : site} requires you to log in again. The apply is paused on that page — sign in in JobAgent Chrome, then click Resume automated apply.`,
       evidence: isLoginUrl(pageUrl) ? "The browser was redirected to a login URL." : "Login-required text detected.",
     };
   }
 
   return null;
+}
+
+/** CAPTCHA and login can be solved in the open browser; access-denied cannot. */
+export function challengeNeedsHuman(kind: BrowserBlockerKind): boolean {
+  return kind === "captcha" || kind === "login_required";
 }

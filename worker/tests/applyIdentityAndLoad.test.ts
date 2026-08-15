@@ -5,6 +5,7 @@ import {
   shouldTreatPageAsUnchangedStall,
   verifyIdentityBeforeSubmit,
   waitOutTransientLoad,
+  wizardStepIsIncomplete,
 } from "../src/apply/applyRunner";
 import type { DetectedField } from "../src/formfill/types";
 
@@ -43,8 +44,10 @@ function fakeFrame(options: {
   textMatches?: RegExp[];
   textVisible?: boolean;
   spinnerVisible?: boolean | (() => boolean);
+  progressBar?: { visible: boolean; valueNow?: string | null; valueMax?: string | null };
   pageText?: string;
   reviewContactName?: string | null;
+  url?: string;
 } = {}) {
   const calls: string[] = [];
   const textMatches = options.textMatches ?? [];
@@ -87,11 +90,25 @@ function fakeFrame(options: {
     isVisible: async () => Boolean(options.pageText),
   };
 
+  const progressBarControl = {
+    ...fieldControl,
+    count: async () => (options.progressBar?.visible ? 1 : 0),
+    first: () => progressBarControl,
+    nth: () => progressBarControl,
+    isVisible: async () => Boolean(options.progressBar?.visible),
+    getAttribute: async (name: string) => {
+      if (name === "aria-valuenow") return options.progressBar?.valueNow ?? null;
+      if (name === "aria-valuemax") return options.progressBar?.valueMax ?? null;
+      return null;
+    },
+  };
+
   const frame = {
-    url: () => "https://smartapply.indeed.com/beta/indeedapply/form/review",
+    url: () => options.url ?? "https://smartapply.indeed.com/beta/indeedapply/form/review",
     locator: (selector: string) => {
       if (selector === "body") return bodyControl;
-      if (selector.includes("progressbar") || selector.includes("spinner")) return spinnerControl;
+      if (selector.includes("progressbar")) return progressBarControl;
+      if (selector.includes("spinner") || selector.includes("loading")) return spinnerControl;
       return fieldControl;
     },
     getByText: (matcher: RegExp | string) => {
@@ -124,14 +141,18 @@ test("Indeed's 'Preparing review' text is recognised as a transient load", async
   // The exact false positive: this screen carries no fillable fields, so its fingerprint
   // matches the previous step's and the stall check used to fire on the very first repeat.
   const { frame } = fakeFrame({
-    textMatches: [/preparing (your )?review|please wait|processing your|submitting your|loading\b|one moment/i],
+    textMatches: [
+      /preparing (your )?review|please wait|processing your|submitting your|loading\b|one moment|uploading\b/i,
+    ],
   });
   assert.equal(await looksLikeTransientLoad(frame), true);
 });
 
 test("hidden 'Preparing review' text is not treated as a loading screen", async () => {
   const { frame } = fakeFrame({
-    textMatches: [/preparing (your )?review|please wait|processing your|submitting your|loading\b|one moment/i],
+    textMatches: [
+      /preparing (your )?review|please wait|processing your|submitting your|loading\b|one moment|uploading\b/i,
+    ],
     textVisible: false,
   });
   assert.equal(await looksLikeTransientLoad(frame), false);
@@ -140,6 +161,22 @@ test("hidden 'Preparing review' text is not treated as a loading screen", async 
 test("an ordinary unchanged page is not mistaken for a loading screen", async () => {
   const { frame } = fakeFrame({});
   assert.equal(await looksLikeTransientLoad(frame), false);
+});
+
+test("Indeed's determinate application progress bar is not a loading overlay", async () => {
+  // Live miss: Easy Apply keeps a 38% progressbar on every step. Treating any visible
+  // role=progressbar as transient load burned the wait budget and reported stalled.
+  const { frame } = fakeFrame({
+    progressBar: { visible: true, valueNow: "38", valueMax: "100" },
+  });
+  assert.equal(await looksLikeTransientLoad(frame), false);
+});
+
+test("an indeterminate progressbar is still recognised as a transient load", async () => {
+  const { frame } = fakeFrame({
+    progressBar: { visible: true, valueNow: null },
+  });
+  assert.equal(await looksLikeTransientLoad(frame), true);
 });
 
 test("waitOutTransientLoad polls on a time budget until the overlay clears", async () => {
@@ -296,4 +333,32 @@ test("no profile name on file at all is its own distinct refusal", async () => {
   const result = await verifyIdentityBeforeSubmit(frame, [], human, null, null);
   assert.equal(result.verified, false);
   assert.match(result.verified ? "" : result.reason, /no first or last name/i);
+});
+
+test("a name confirmed earlier in the same run does not need an Indeed-style review row", async () => {
+  const { frame } = fakeFrame({});
+  const result = await verifyIdentityBeforeSubmit(
+    frame,
+    [],
+    human,
+    "Md Mahamudul Hasan",
+    "Khan",
+    true,
+  );
+  assert.deepEqual(result, { verified: true, corrected: false });
+});
+
+test("Dice review without a Name row is verified via the logged-in account", async () => {
+  const { frame } = fakeFrame({
+    url: "https://www.dice.com/job-applications/0406ca92-0280-413c-a5c6-ec9bed1008b4/wizard",
+    pageText: "Review your application",
+  });
+  const result = await verifyIdentityBeforeSubmit(frame, [], human, "Md Mahamudul Hasan", "Khan");
+  assert.deepEqual(result, { verified: true, corrected: false });
+});
+
+test("Dice step 2 of 3 is not treated as the terminal submit step", () => {
+  assert.equal(wizardStepIsIncomplete("You're Applying for X. Step 2 of 3 Additional Information"), true);
+  assert.equal(wizardStepIsIncomplete("Step 3 of 3 Review"), false);
+  assert.equal(wizardStepIsIncomplete("Review your application"), false);
 });

@@ -13,6 +13,16 @@ export async function isApplyPaused(userId: string): Promise<boolean> {
   return settings?.applyPaused ?? false;
 }
 
+export async function setApplyPaused(userId: string, paused: boolean): Promise<void> {
+  await getWorkerDb()
+    .insert(schema.automationSettings)
+    .values({ userId, applyPaused: paused, updatedAt: new Date() })
+    .onConflictDoUpdate({
+      target: schema.automationSettings.userId,
+      set: { applyPaused: paused, updatedAt: new Date() },
+    });
+}
+
 export type RunLimitCandidate = {
   jobId: string;
   targetRoleId: string;

@@ -1,16 +1,23 @@
 import { randomBytes } from "node:crypto";
 import { and, desc, eq, inArray, or } from "drizzle-orm";
 import * as schema from "../../../src/db/schema";
-import type { BrowserContextLike, FrameLike, PageLike } from "../browser/playwrightTypes";
+import type { BrowserContextLike, FrameLike, LocatorLike, PageLike } from "../browser/playwrightTypes";
 import { getConfig, sleep } from "../config";
-import { addCommandEvent, getCandidateProfileForUser, getWorkerDb } from "../db";
+import {
+  addCommandEvent,
+  getBlockedSources,
+  getCandidateProfileForUser,
+  getResumeVersionForUser,
+  getWorkerDb,
+  resolveAutomationAlerts,
+} from "../db";
 import {
   applyShouldHalt,
   clearInFlightApply,
   markInFlightSubmitting,
   trackInFlightApply,
 } from "../workerAbort";
-import { loadAnswerBankWithContext, markAnswersUsed } from "../formfill/answerBank";
+import { loadAnswerBankWithContext, markAnswersUsed, persistResumeLocationAnswers } from "../formfill/answerBank";
 import {
   detectFields,
   expandComboboxOptions,
@@ -24,11 +31,15 @@ import {
 import { optionMatches } from "../formfill/optionMatching";
 import type { DetectedField, MatchSettings } from "../formfill/types";
 import { logger } from "../logger";
-import { detectBrowserBlocker, siteFromUrl } from "../browser/blockerDetection";
+import { challengeNeedsHuman, detectBrowserBlocker, siteFromUrl } from "../browser/blockerDetection";
 import { reportBrowserBlocker } from "../browser/reportBlocker";
 import { resolveNotifyChannel, type PendingQuestionSummary } from "../notify";
 import { humanDelayMs } from "../search/browserDiscovery";
 import { materializeResume } from "../resume/materialize";
+import {
+  locationAnswersFromResumeEntries,
+  parseResumeEntries,
+} from "../resume/parseEntries";
 import {
   createArtifactContext,
   finishTrace,
@@ -40,8 +51,11 @@ import { decideFieldAction, effectiveMode, type ApplyMode } from "./applyPolicy"
 import {
   ELIGIBLE_ROLE_MATCH_STATUS,
   isApplyPaused,
+  setApplyPaused,
 } from "./applyEligibility";
-import { adapterFor, isExternalAts, sourceUrlAllowed } from "./applySteps";
+import { waitForHumanChallenge } from "./waitForHumanChallenge";
+import { adapterFor, isExternalAts, looksLikeAlreadyApplied, sourceUrlAllowed } from "./applySteps";
+import { attachResumeFile, clearCoverLetterUploads, resumeDropzoneNeedsFile } from "./resumeUpload";
 import { decideExternalSiteApply } from "./externalSitePolicy";
 import {
   classifyExternalPage,
@@ -51,7 +65,22 @@ import {
 } from "./external/externalApply";
 import { decideSubmission } from "./external/submissionGuard";
 import { withOllamaLock } from "../ai/ollamaLock";
-import { fillDetectedField, type HumanTyping } from "./fillField";
+import {
+  fillDetectedField,
+  pendingAsksWhenFormRefused,
+  type HumanTyping,
+} from "./fillField";
+import {
+  clickResumeCardEdit,
+  clickResumeCardSave,
+  isHistoricalResumeLocationField,
+  listIncompleteResumeCards,
+  locationValueForField,
+  pendingAsksFromResumeCards,
+  resolveResumeCardLocation,
+  syntheticLocationField,
+  withResumeCardContext,
+} from "./resumeCards";
 import {
   createHumanTyping,
   interFieldDelayMs,
@@ -131,7 +160,8 @@ function shortId(): string {
 }
 
 /** Wording sites use for a step that is genuinely still working, not stuck. */
-const TRANSIENT_LOAD_TEXT = /preparing (your )?review|please wait|processing your|submitting your|loading\b|one moment/i;
+const TRANSIENT_LOAD_TEXT =
+  /preparing (your )?review|please wait|processing your|submitting your|loading\b|one moment|uploading\b/i;
 
 /**
  * True when the page looks like it is mid-transition rather than actually refusing to
@@ -145,16 +175,36 @@ const TRANSIENT_LOAD_TEXT = /preparing (your )?review|please wait|processing you
  */
 export async function looksLikeTransientLoad(frame: FrameLike): Promise<boolean> {
   const spinner = frame.locator(
-    '[role="progressbar"], [class*="spinner" i], [class*="loading" i][aria-hidden="false"]',
+    '[class*="spinner" i], [class*="loading" i][aria-hidden="false"]',
   );
   if ((await spinner.count().catch(() => 0)) > 0) {
     if (await spinner.first().isVisible({ timeout: 500 }).catch(() => false)) return true;
   }
+
+  // Indeed keeps a determinate application progress bar on every Easy Apply step
+  // (the live miss was a persistent 38% bar). That is page chrome, not a load overlay.
+  // An indeterminate progressbar — no aria-valuenow — is still treated as loading.
+  const bars = frame.locator('[role="progressbar"]');
+  const barCount = await bars.count().catch(() => 0);
+  for (let index = 0; index < barCount; index += 1) {
+    const bar = bars.nth(index);
+    if (!(await bar.isVisible({ timeout: 500 }).catch(() => false))) continue;
+    if (await isDeterminateProgress(bar)) continue;
+    return true;
+  }
+
   const loadText = frame.getByText(TRANSIENT_LOAD_TEXT);
   if ((await loadText.count().catch(() => 0)) > 0) {
     return loadText.first().isVisible({ timeout: 500 }).catch(() => false);
   }
   return false;
+}
+
+async function isDeterminateProgress(bar: LocatorLike): Promise<boolean> {
+  const now = await bar.getAttribute("aria-valuenow").catch(() => null);
+  if (now == null || now.trim() === "") return false;
+  const value = Number(now);
+  return Number.isFinite(value);
 }
 
 export const TRANSIENT_LOAD_BUDGET_MS = 8_000;
@@ -230,7 +280,7 @@ export function contactNameMatchesExpected(
  * because this walks getComputedStyle / bounding boxes.
  */
 const READ_REVIEW_CONTACT_NAME_SCRIPT = `(() => {
-  const LABEL = /^(name|full name|legal name|contact name)$/i;
+  const LABEL = /^(name|full name|legal name|contact name|contact information|applicant name|your name)$/i;
   function visible(el) {
     if (!(el instanceof Element)) return false;
     const style = getComputedStyle(el);
@@ -331,12 +381,29 @@ async function confirmNameField(
  * page — confirmation must come from a dedicated Name / Contact information row, not
  * from searching the whole page (a resume filename is not a contact name).
  */
+export function wizardStepIsIncomplete(text: string): boolean {
+  const match = text.match(/\bstep\s+(\d+)\s+of\s+(\d+)\b/i);
+  if (!match) return false;
+  return Number(match[1]) < Number(match[2]);
+}
+
+/** Dice's review step has no Name/Contact row; identity lives on the logged-in account. */
+export function boardHostedAccountIdentity(url: string): boolean {
+  try {
+    const host = new URL(url).hostname.toLowerCase();
+    return host === "dice.com" || host.endsWith(".dice.com");
+  } catch {
+    return false;
+  }
+}
+
 export async function verifyIdentityBeforeSubmit(
   frame: FrameLike,
   fields: DetectedField[],
   human: HumanTyping,
   expectedFirstName: string | null,
   expectedLastName: string | null,
+  alreadyConfirmedThisRun = false,
 ): Promise<IdentityCheck> {
   const first = expectedFirstName?.trim() || null;
   const last = expectedLastName?.trim() || null;
@@ -362,18 +429,27 @@ export async function verifyIdentityBeforeSubmit(
   }
 
   const missingStructuredComponent = Boolean((first && !firstField) || (last && !lastField));
+  if (missingStructuredComponent && alreadyConfirmedThisRun) {
+    return { verified: true, corrected };
+  }
   if (missingStructuredComponent) {
     const structured = await readReviewContactName(frame);
-    if (!structured) {
+    if (structured) {
+      if (!contactNameMatchesExpected(structured, first, last)) {
+        return {
+          verified: false,
+          reason: `Contact name "${structured}" does not match the candidate profile.`,
+        };
+      }
+    } else if (boardHostedAccountIdentity(frame.url())) {
+      // Dice Easy Apply never shows a Name row; the logged-in Dice profile is what
+      // the employer receives. Refusing here blocked every Dice submit after a
+      // complete review page.
+      return { verified: true, corrected };
+    } else {
       return {
         verified: false,
         reason: "Could not find a Name / Contact information row to confirm before submitting.",
-      };
-    }
-    if (!contactNameMatchesExpected(structured, first, last)) {
-      return {
-        verified: false,
-        reason: `Contact name "${structured}" does not match the candidate profile.`,
       };
     }
   }
@@ -728,6 +804,108 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
   });
 
   try {
+    const persistHalt = async (stopReason: string) => {
+      await upsertApplication({
+        userId: input.userId,
+        jobId: input.job.id,
+        status: statusAfterApplyFailure(submittingWritten),
+        stopReason: submittingWritten ? "submit_aborted_before_click" : stopReason,
+      });
+      await finishTrace(artifactCtx, true);
+    };
+
+    const handlePageBlocker = async (
+      page: PageLike,
+      blocker: {
+        kind: "captcha" | "login_required" | "access_denied";
+        site: ReturnType<typeof siteFromUrl>;
+        pageUrl: string;
+        message: string;
+        evidence: string;
+      },
+      screenshotName: string,
+    ): Promise<"continue" | "blocked" | "canceled" | "time_limit"> => {
+      if (!challengeNeedsHuman(blocker.kind)) {
+        await reportBrowserBlocker({
+          commandId: input.commandId,
+          userId: input.userId,
+          blocker,
+          cfg,
+        });
+        await upsertApplication({
+          userId: input.userId,
+          jobId: input.job.id,
+          status: "blocked",
+          stopReason: blocker.message,
+          applyUrl: page.url(),
+        });
+        await screenshot(artifactCtx, screenshotName);
+        await finishTrace(artifactCtx, true);
+        return "blocked";
+      }
+
+      await screenshot(artifactCtx, screenshotName);
+      await upsertApplication({
+        userId: input.userId,
+        jobId: input.job.id,
+        status: submittingWritten ? "submitting" : "filling",
+        stopReason: "waiting_for_human",
+        applyUrl: page.url(),
+      });
+      logger.info("Apply paused for a human challenge", {
+        commandId: input.commandId,
+        jobId: input.job.id,
+        kind: blocker.kind,
+        site: blocker.site,
+        pageUrl: page.url(),
+      });
+
+      const wait = await waitForHumanChallenge({
+        initial: blocker,
+        detect: () => detectBrowserBlocker(page, siteFromUrl(page.url())),
+        isPaused: () => isApplyPaused(input.userId),
+        setPaused: (paused) => setApplyPaused(input.userId, paused),
+        alertStillOpen: async () => (await getBlockedSources(input.userId)).includes(blocker.site),
+        onAsk: async (current) => {
+          await reportBrowserBlocker({
+            commandId: input.commandId,
+            userId: input.userId,
+            blocker: current,
+            cfg,
+          });
+          await addCommandEvent(
+            input.commandId,
+            "apply_waiting_for_human",
+            current.message,
+            {
+              jobId: input.job.id,
+              kind: current.kind,
+              site: current.site,
+              pageUrl: current.pageUrl,
+            },
+          );
+        },
+        onCleared: async () => {
+          await resolveAutomationAlerts(input.userId, [blocker.site]);
+          await addCommandEvent(
+            input.commandId,
+            "apply_human_challenge_cleared",
+            "Human challenge cleared; apply continuing.",
+            { jobId: input.job.id, site: blocker.site },
+          );
+        },
+        shouldHalt: async () =>
+          (await applyShouldHalt(input.commandId)) ||
+          Boolean(input.deadlineAt && Date.now() >= input.deadlineAt),
+      });
+
+      if (wait === "aborted") {
+        if (input.deadlineAt && Date.now() >= input.deadlineAt) return "time_limit";
+        return "canceled";
+      }
+      return "continue";
+    };
+
     if (await applyShouldHalt(input.commandId)) {
       await upsertApplication({
         userId: input.userId,
@@ -743,6 +921,19 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
       timeout: cfg.JOB_BROWSER_NAVIGATION_TIMEOUT_MS,
     });
     const fixture = input.job.sourceUrl.startsWith("file:");
+    const resolvePauseOrChallenge = async (
+      page: PageLike,
+      screenshotName: string,
+    ): Promise<"continue" | "paused" | "blocked" | "canceled" | "time_limit"> => {
+      if (!(await isApplyPaused(input.userId))) return "continue";
+      const blocker = fixture
+        ? null
+        : await detectBrowserBlocker(page, siteFromUrl(page.url()));
+      if (blocker && challengeNeedsHuman(blocker.kind)) {
+        return handlePageBlocker(page, blocker, screenshotName);
+      }
+      return "paused";
+    };
     await sleep(
       fixture
         ? 50
@@ -770,22 +961,18 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
         message: legacyBlocked!.reason,
         evidence: legacyBlocked!.reason,
       };
-      await reportBrowserBlocker({
-        commandId: input.commandId,
-        userId: input.userId,
-        blocker,
-        cfg,
-      });
-      await upsertApplication({
-        userId: input.userId,
-        jobId: input.job.id,
-        status: "blocked",
-        stopReason: blocker.message,
-        applyUrl: input.page.url(),
-      });
-      await screenshot(artifactCtx, "blocked");
-      await finishTrace(artifactCtx, true);
-      return { stopReason: "blocked", applicationId: application.id, artifacts: artifactCtx.paths };
+      const outcome = await handlePageBlocker(input.page, blocker, "blocked");
+      if (outcome === "blocked") {
+        return { stopReason: "blocked", applicationId: application.id, artifacts: artifactCtx.paths };
+      }
+      if (outcome === "canceled") {
+        await persistHalt("canceled");
+        return { stopReason: "canceled", applicationId: application.id, artifacts: artifactCtx.paths };
+      }
+      if (outcome === "time_limit") {
+        await persistHalt("application_time_limit");
+        return { stopReason: "time_limit", applicationId: application.id, artifacts: artifactCtx.paths };
+      }
     }
 
     const applyButton = await adapter.findApplyButton(input.page);
@@ -798,6 +985,22 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
     const activePage = pages[pages.length - 1] ?? input.page;
     artifactCtx.page = activePage;
     const applyUrl = activePage.url();
+    const landingText = await activePage.locator("body").innerText({ timeout: 2_000 }).catch(() => "");
+    if (looksLikeAlreadyApplied(landingText)) {
+      await upsertApplication({
+        userId: input.userId,
+        jobId: input.job.id,
+        status: "applied",
+        applyUrl,
+        submittedAt: new Date(),
+        appliedAt: new Date(),
+        confirmationEvidence: { alreadyAppliedPage: true },
+        stopReason: "already_applied",
+      });
+      await screenshot(artifactCtx, "already-applied");
+      await finishTrace(artifactCtx, false);
+      return { stopReason: "already_applied", applicationId: application.id, artifacts: artifactCtx.paths };
+    }
     const external = isExternalAts(applyUrl, adapter.allowedApplyHosts);
     let onExternalSite = false;
     if (external.external && input.job.source !== "fixture") {
@@ -885,6 +1088,21 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
       visaSignal: input.job.visaSignal,
     });
     const answers = bank.answers;
+    const resumeRecord = resumeVersionId
+      ? await getResumeVersionForUser(resumeVersionId, input.userId)
+      : null;
+    const resumeEntries = parseResumeEntries(resumeRecord?.resumeText ?? "");
+    const parsedLocations = locationAnswersFromResumeEntries(resumeEntries);
+    if (parsedLocations.length) {
+      await persistResumeLocationAnswers(input.userId, parsedLocations);
+      const seen = new Set(answers.map((answer) => `${answer.normalizedQuestion}|${answer.category}`));
+      for (const parsed of parsedLocations) {
+        const key = `${parsed.normalizedQuestion}|${parsed.category}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        answers.push(parsed);
+      }
+    }
     // Authoritative name for the pre-submit identity gate. The answer bank is ordered
     // job → company → profile, so a stale learned first_name would otherwise beat the
     // candidate profile. This check is about who is being submitted, not what a prior
@@ -892,6 +1110,7 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
     const profile = await getCandidateProfileForUser(input.userId);
     const expectedFirstName = profile?.firstName?.trim() || null;
     const expectedLastName = profile?.lastName?.trim() || null;
+    let identityConfirmedThisRun = false;
     if (bank.addressLabel) {
       // Logged as well as recorded: command events only reach the dashboard, while the
       // JobAgent activity log mirrors this process's stdout. Both decisions below put
@@ -957,18 +1176,9 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
     /** Set after clicking to advance, so an unchanged page next round means the form refused. */
     let clickedWithoutProgress = false;
 
-    const persistHalt = async (stopReason: string) => {
-      await upsertApplication({
-        userId: input.userId,
-        jobId: input.job.id,
-        status: statusAfterApplyFailure(submittingWritten),
-        stopReason: submittingWritten ? "submit_aborted_before_click" : stopReason,
-      });
-      await finishTrace(artifactCtx, true);
-    };
-
     for (let step = 0; step < cfg.JOB_APPLY_MAX_STEPS; step += 1) {
-      if (await isApplyPaused(input.userId)) {
+      const pauseOrChallenge = await resolvePauseOrChallenge(activePage, `blocked-step-${step}`);
+      if (pauseOrChallenge === "paused") {
         await upsertApplication({
           userId: input.userId,
           jobId: input.job.id,
@@ -977,6 +1187,17 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
         });
         await finishTrace(artifactCtx, true);
         return { stopReason: "canceled", applicationId: application.id, artifacts: artifactCtx.paths };
+      }
+      if (pauseOrChallenge === "blocked") {
+        return { stopReason: "blocked", applicationId: application.id, artifacts: artifactCtx.paths };
+      }
+      if (pauseOrChallenge === "canceled") {
+        await persistHalt("canceled");
+        return { stopReason: "canceled", applicationId: application.id, artifacts: artifactCtx.paths };
+      }
+      if (pauseOrChallenge === "time_limit") {
+        await persistHalt("application_time_limit");
+        return { stopReason: "time_limit", applicationId: application.id, artifacts: artifactCtx.paths };
       }
       if (input.deadlineAt && Date.now() >= input.deadlineAt) {
         await upsertApplication({
@@ -1005,25 +1226,34 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
           message: legacyStepBlocked!.reason,
           evidence: legacyStepBlocked!.reason,
         };
-        await reportBrowserBlocker({
-          commandId: input.commandId,
-          userId: input.userId,
-          blocker,
-          cfg,
-        });
-        await upsertApplication({
-          userId: input.userId,
-          jobId: input.job.id,
-          status: "blocked",
-          stopReason: blocker.message,
-          applyUrl: activePage.url(),
-        });
-        await screenshot(artifactCtx, `blocked-step-${step}`);
-        await finishTrace(artifactCtx, true);
-        return { stopReason: "blocked", applicationId: application.id, artifacts: artifactCtx.paths };
+        const outcome = await handlePageBlocker(activePage, blocker, `blocked-step-${step}`);
+        if (outcome === "blocked") {
+          return { stopReason: "blocked", applicationId: application.id, artifacts: artifactCtx.paths };
+        }
+        if (outcome === "canceled") {
+          await persistHalt("canceled");
+          return { stopReason: "canceled", applicationId: application.id, artifacts: artifactCtx.paths };
+        }
+        if (outcome === "time_limit") {
+          await persistHalt("application_time_limit");
+          return { stopReason: "time_limit", applicationId: application.id, artifacts: artifactCtx.paths };
+        }
       }
 
       const { frame } = await resolveFormRoot(activePage, adapter.allowedApplyHosts);
+      if (mode !== "dry_run") {
+        if (resumePath) {
+          const attached = await attachResumeFile(frame, resumePath, input.page);
+          if (attached) resumeUploaded = true;
+        }
+        if (resumeUploaded || !(await resumeDropzoneNeedsFile(frame))) {
+          await clearCoverLetterUploads(frame);
+        }
+        if (resumePath && (await resumeDropzoneNeedsFile(frame))) {
+          const attached = await attachResumeFile(frame, resumePath, input.page);
+          if (attached) resumeUploaded = true;
+        }
+      }
       let fields = await detectFields(frame);
       if (mode !== "dry_run") {
         fields = await expandComboboxOptions(frame, fields);
@@ -1082,43 +1312,17 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
         justClearedTransientLoad = wait === "cleared";
       }
 
-      if (
-        shouldTreatPageAsUnchangedStall({
-          clickedWithoutProgress,
-          fingerprint,
-          previousFingerprint,
-          justClearedTransientLoad,
-        })
-      ) {
-        const unanswered = fields.filter(
-          (field) => field.required && !String(field.currentValue ?? "").trim(),
-        );
-        const detail = unanswered.length
-          ? `The form would not advance. ${unanswered.length} required field(s) are unanswered: ${unanswered
-              .map((field) => field.labelText || field.name || field.fieldCategory)
-              .filter(Boolean)
-              .slice(0, 5)
-              .join("; ")}`
-          : "The form would not advance and no unanswered required field was visible.";
-        await upsertApplication({
-          userId: input.userId,
-          jobId: input.job.id,
-          status: "needs_manual",
-          stopReason: detail,
-        });
-        await addCommandEvent(input.commandId, "apply_form_refused", detail, {
-          jobId: input.job.id,
-          url: frame.url(),
-          unanswered: unanswered.map((field) => field.labelText || field.name),
-        });
-        await finishTrace(artifactCtx, true);
-        return { stopReason: "stalled", applicationId: application.id, artifacts: artifactCtx.paths };
-      }
-
       const asks: Array<{ field: DetectedField; reason: string }> = [];
       const usedAnswerIds: string[] = [];
+      let skipFillBecauseFormRefused = false;
+      let resumeCardsRepaired = false;
 
-      for (const field of fields) {
+      const locationExtras = {
+        state: answers.find((answer) => answer.category === "state")?.answerValue ?? null,
+        postalCode: answers.find((answer) => answer.category === "zip")?.answerValue ?? null,
+      };
+
+      const applyOneField = async (field: DetectedField) => {
         const suggestion = buildSuggestion(field, answers);
         let suggestedValue = suggestion.suggestedValue || undefined;
         let dropdownMapped = false;
@@ -1154,46 +1358,178 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
           label: field.labelText,
         });
 
-        if (mode === "dry_run") continue;
-
+        if (mode === "dry_run") return;
         if (action.kind === "ask") {
           asks.push({ field, reason: action.reason });
-          continue;
+          return;
         }
         if (action.kind === "skip") {
-          if (
-            field.fieldCategory === "resume_upload" &&
-            resumePath &&
-            field.inputType === "file" &&
-            !resumeUploaded &&
-            // The detector's own signal that this particular input already has a file,
-            // in case a stale duplicate is sitting alongside the live one this step.
-            field.currentValue !== "File selected"
-          ) {
-            try {
-              await frame.locator(field.selector).first().setInputFiles(resumePath, {
-                timeout: 10_000,
-              });
+          if (field.fieldCategory === "resume_upload") {
+            sawResumeUploadField = true;
+            await clearCoverLetterUploads(frame);
+            if (field.currentValue === "File selected") {
               resumeUploaded = true;
-            } catch (error) {
-              // Not fatal. The submission guard already refuses to submit without
-              // resumeAttached, so a failed upload here is caught at the right place —
-              // held for a person — rather than taking the whole application down.
-              logger.warn("Resume upload failed; continuing without it", {
-                jobId: input.job.id,
-                error: error instanceof Error ? error.message : String(error),
-              });
+            } else if (resumePath && !resumeUploaded) {
+              const attached = await attachResumeFile(frame, resumePath, input.page);
+              if (attached) {
+                resumeUploaded = true;
+              } else {
+                logger.warn("Resume upload failed; continuing without it", {
+                  jobId: input.job.id,
+                  selector: field.selector,
+                });
+              }
             }
-          } else if (field.fieldCategory === "resume_upload" && field.currentValue === "File selected") {
-            resumeUploaded = true;
           }
-          if (field.fieldCategory === "resume_upload") sawResumeUploadField = true;
-          continue;
+          return;
         }
 
-        await fillDetectedField(frame, field, action.value, human);
+        const filled = await fillDetectedField(
+          frame,
+          field,
+          action.value,
+          human,
+          // A work/education city belongs to that resume entry. Falling back to the
+          // candidate's current state or ZIP could turn "Copenhagen" into
+          // "Copenhagen, NY" when Indeed's autocomplete misses the first query.
+          isHistoricalResumeLocationField(field) ? {} : locationExtras,
+        );
+        if (!filled.ok) {
+          asks.push({ field, reason: filled.reason });
+          return;
+        }
         if (suggestion.savedAnswer) usedAnswerIds.push(suggestion.savedAnswer.id);
         await sleep(fixture ? 10 : interFieldDelayMs(random));
+      };
+
+      const incompleteCards = await listIncompleteResumeCards(frame);
+      if (incompleteCards.length) {
+        logger.info("Indeed resume-detail cards need locations", {
+          jobId: input.job.id,
+          headings: incompleteCards.map((card) => card.heading),
+        });
+      }
+      if (incompleteCards.length && mode !== "dry_run") {
+        await addCommandEvent(
+          input.commandId,
+          "apply_resume_cards",
+          `Opening ${incompleteCards.length} incomplete Indeed resume card(s).`,
+          { jobId: input.job.id, headings: incompleteCards.map((card) => card.heading) },
+        );
+        for (const card of incompleteCards) {
+          const before = new Set((await detectFields(frame)).map((field) => field.selector));
+          const opened = await clickResumeCardEdit(frame, card);
+          const resolved = resolveResumeCardLocation(card, answers, resumeEntries);
+          if (!opened) {
+            if (!resolved) asks.push(...pendingAsksFromResumeCards([card], answers));
+            continue;
+          }
+          await sleep(fixture ? 20 : 800);
+          let editorFields = (await detectFields(frame)).filter((field) => !before.has(field.selector));
+          if (!editorFields.length) {
+            editorFields = (await detectFields(frame)).filter((field) => {
+              const contextual = withResumeCardContext(field, card);
+              return (
+                isHistoricalResumeLocationField(contextual) ||
+                ["city", "state", "zip", "country", "address"].includes(field.fieldCategory) ||
+                /\blocation|city|state|country\b/i.test(field.labelText)
+              );
+            });
+          }
+          if (editorFields.length) {
+            editorFields = await expandComboboxOptions(frame, editorFields);
+          }
+          const locationFields = editorFields
+            .map((field) => withResumeCardContext(field, card))
+            .filter(
+              (field) =>
+                isHistoricalResumeLocationField(field) ||
+                ["city", "state", "zip", "country", "address"].includes(field.fieldCategory) ||
+                /\blocation|city|state|country\b/i.test(field.labelText),
+            );
+          if (!resolved) {
+            asks.push(...pendingAsksFromResumeCards([card], answers));
+            continue;
+          }
+          if (!locationFields.length) {
+            asks.push({
+              field: syntheticLocationField(card),
+              reason:
+                "A resume location exists for this entry, but no location field was found after opening the card.",
+            });
+            continue;
+          }
+          let fillFailed = false;
+          for (const field of locationFields) {
+            const value = locationValueForField(field, resolved.value);
+            const filled = await fillDetectedField(frame, field, value, human, {
+              acceptTypedLocation: true,
+            });
+            if (!filled.ok) {
+              asks.push({ field, reason: filled.reason });
+              fillFailed = true;
+              break;
+            }
+          }
+          if (fillFailed) continue;
+          resumeCardsRepaired = (await clickResumeCardSave(frame)) || resumeCardsRepaired;
+          await sleep(fixture ? 10 : 300);
+        }
+        fields = await detectFields(frame);
+        fingerprint = fieldFingerprint(fields, frame.url());
+        if (asks.length) skipFillBecauseFormRefused = true;
+      }
+
+      if (
+        shouldTreatPageAsUnchangedStall({
+          clickedWithoutProgress,
+          fingerprint,
+          previousFingerprint,
+          justClearedTransientLoad,
+        })
+      ) {
+        if (!asks.length) asks.push(...pendingAsksWhenFormRefused(fields));
+        if (!asks.length) {
+          asks.push(...pendingAsksFromResumeCards(await listIncompleteResumeCards(frame), answers));
+        }
+        if (!asks.length && resumeCardsRepaired) {
+          skipFillBecauseFormRefused = true;
+        } else if (!asks.length) {
+          const unanswered = fields.filter(
+            (field) => field.required && !String(field.currentValue ?? "").trim(),
+          );
+          const resumeMissing = await resumeDropzoneNeedsFile(frame);
+          const detail = resumeMissing
+            ? "Resume was not attached, so the form would not advance."
+            : unanswered.length
+            ? `The form would not advance. ${unanswered.length} required field(s) are unanswered: ${unanswered
+                .map((field) => field.labelText || field.name || field.fieldCategory)
+                .filter(Boolean)
+                .slice(0, 5)
+                .join("; ")}`
+            : "The form would not advance and no unanswered required field was visible.";
+          await upsertApplication({
+            userId: input.userId,
+            jobId: input.job.id,
+            status: "needs_manual",
+            stopReason: detail,
+          });
+          await addCommandEvent(input.commandId, "apply_form_refused", detail, {
+            jobId: input.job.id,
+            url: frame.url(),
+            unanswered: unanswered.map((field) => field.labelText || field.name),
+          });
+          await finishTrace(artifactCtx, true);
+          return { stopReason: "stalled", applicationId: application.id, artifacts: artifactCtx.paths };
+        } else {
+          skipFillBecauseFormRefused = true;
+        }
+      }
+
+      if (!skipFillBecauseFormRefused) {
+        for (const field of fields) {
+          await applyOneField(field);
+        }
       }
 
       // Reuse counters are diagnostic only — never let them fail an application.
@@ -1209,6 +1545,17 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
       }
 
       const stepScreenshotPath = await screenshot(artifactCtx, `step-${step}`);
+
+      if (await looksLikeTransientLoad(frame)) {
+        const wait = await waitOutTransientLoad(frame, {
+          budgetMs: 20_000,
+          shouldHalt: () => applyShouldHalt(input.commandId),
+        });
+        if (wait === "aborted") {
+          await persistHalt("canceled");
+          return { stopReason: "canceled", applicationId: application.id, artifacts: artifactCtx.paths };
+        }
+      }
 
       if (mode === "dry_run") {
         await writePlanArtifact(artifactCtx, plan);
@@ -1312,7 +1659,7 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
             adapter.findAdvanceControl(frame),
           )
         : null;
-      const advance = external
+      let advance = external
         ? {
             locator: external.selector
               ? frame.locator(external.selector).first()
@@ -1322,6 +1669,12 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
             isTerminalSubmit: controlIsSafeToSubmit(external),
           }
         : await adapter.findAdvanceControl(frame);
+      if (advance?.isTerminalSubmit) {
+        const bodyText = await frame.locator("body").innerText({ timeout: 2_000 }).catch(() => "");
+        if (wizardStepIsIncomplete(bodyText)) {
+          advance = { ...advance, isTerminalSubmit: false };
+        }
+      }
       if (!advance) {
         if (fingerprint === previousFingerprint) {
           stallRetries += 1;
@@ -1353,6 +1706,7 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
             human,
             expectedFirstName,
             expectedLastName,
+            identityConfirmedThisRun,
           );
           if (!identity.verified) {
             await upsertApplication({
@@ -1368,6 +1722,7 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
             await finishTrace(artifactCtx, true);
             return { stopReason: "needs_manual", applicationId: application.id, artifacts: artifactCtx.paths };
           }
+          identityConfirmedThisRun = true;
           if (identity.corrected) {
             // One action before an irreversible click. Re-scan next iteration and confirm
             // clean rather than clicking submit in the same pass as the fix.
@@ -1414,7 +1769,8 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
             return { stopReason: "needs_manual", applicationId: application.id, artifacts: artifactCtx.paths };
           }
         }
-        if (await isApplyPaused(input.userId)) {
+        const pauseBeforeSubmit = await resolvePauseOrChallenge(activePage, "blocked-before-submit");
+        if (pauseBeforeSubmit === "paused") {
           await upsertApplication({
             userId: input.userId,
             jobId: input.job.id,
@@ -1423,6 +1779,17 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
           });
           await finishTrace(artifactCtx, true);
           return { stopReason: "canceled", applicationId: application.id, artifacts: artifactCtx.paths };
+        }
+        if (pauseBeforeSubmit === "blocked") {
+          return { stopReason: "blocked", applicationId: application.id, artifacts: artifactCtx.paths };
+        }
+        if (pauseBeforeSubmit === "canceled") {
+          await persistHalt("canceled");
+          return { stopReason: "canceled", applicationId: application.id, artifacts: artifactCtx.paths };
+        }
+        if (pauseBeforeSubmit === "time_limit") {
+          await persistHalt("application_time_limit");
+          return { stopReason: "time_limit", applicationId: application.id, artifacts: artifactCtx.paths };
         }
         if (input.deadlineAt && Date.now() >= input.deadlineAt) {
           await upsertApplication({
@@ -1474,14 +1841,82 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
 
         await screenshot(artifactCtx, "98-before-submit");
         await sleep(preSubmitDelayMs(random));
-        if ((await isApplyPaused(input.userId)) || (await applyShouldHalt(input.commandId))) {
+        if (await applyShouldHalt(input.commandId)) {
           await persistHalt("submit_canceled_before_click");
           submittingWritten = false;
           return { stopReason: "canceled", applicationId: application.id, artifacts: artifactCtx.paths };
         }
+        const pauseBeforeClick = await resolvePauseOrChallenge(activePage, "blocked-before-submit");
+        if (pauseBeforeClick === "paused") {
+          await persistHalt("submit_canceled_before_click");
+          submittingWritten = false;
+          return { stopReason: "canceled", applicationId: application.id, artifacts: artifactCtx.paths };
+        }
+        if (pauseBeforeClick === "blocked") {
+          return { stopReason: "blocked", applicationId: application.id, artifacts: artifactCtx.paths };
+        }
+        if (pauseBeforeClick === "canceled" || pauseBeforeClick === "time_limit") {
+          await persistHalt(pauseBeforeClick === "time_limit" ? "application_time_limit" : "canceled");
+          submittingWritten = false;
+          return {
+            stopReason: pauseBeforeClick === "time_limit" ? "time_limit" : "canceled",
+            applicationId: application.id,
+            artifacts: artifactCtx.paths,
+          };
+        }
         await advance.locator.click({ timeout: 5000 });
-        await sleep(1500 + random() * 1500);
-        const success = await adapter.detectSuccess(activePage);
+        const wait = await waitOutTransientLoad(frame, {
+          budgetMs: 15_000,
+          shouldHalt: () => applyShouldHalt(input.commandId),
+        });
+        if (wait === "aborted") {
+          await persistHalt("canceled");
+          submittingWritten = false;
+          return { stopReason: "canceled", applicationId: application.id, artifacts: artifactCtx.paths };
+        }
+
+        const postSubmitBlocker = fixture
+          ? null
+          : await detectBrowserBlocker(activePage, siteFromUrl(activePage.url()));
+        if (postSubmitBlocker) {
+          const outcome = await handlePageBlocker(activePage, postSubmitBlocker, "blocked-after-submit");
+          if (outcome === "blocked") {
+            return { stopReason: "blocked", applicationId: application.id, artifacts: artifactCtx.paths };
+          }
+          if (outcome === "canceled") {
+            await persistHalt("canceled");
+            return { stopReason: "canceled", applicationId: application.id, artifacts: artifactCtx.paths };
+          }
+          if (outcome === "time_limit") {
+            await persistHalt("application_time_limit");
+            return { stopReason: "time_limit", applicationId: application.id, artifacts: artifactCtx.paths };
+          }
+        }
+
+        let success = await adapter.detectSuccess(activePage);
+        for (let attempt = 0; attempt < 4 && !success; attempt += 1) {
+          const retryBlocker = fixture
+            ? null
+            : await detectBrowserBlocker(activePage, siteFromUrl(activePage.url()));
+          if (retryBlocker && challengeNeedsHuman(retryBlocker.kind)) {
+            const outcome = await handlePageBlocker(activePage, retryBlocker, "blocked-after-submit");
+            if (outcome === "blocked") {
+              return { stopReason: "blocked", applicationId: application.id, artifacts: artifactCtx.paths };
+            }
+            if (outcome === "canceled") {
+              await persistHalt("canceled");
+              return { stopReason: "canceled", applicationId: application.id, artifacts: artifactCtx.paths };
+            }
+            if (outcome === "time_limit") {
+              await persistHalt("application_time_limit");
+              return { stopReason: "time_limit", applicationId: application.id, artifacts: artifactCtx.paths };
+            }
+            success = await adapter.detectSuccess(activePage);
+            continue;
+          }
+          await sleep(1_500);
+          success = await adapter.detectSuccess(activePage);
+        }
         await screenshot(artifactCtx, "99-after-submit");
         if (success) {
           // Only the application row is written. `jobs` is shared across users and has no

@@ -34,23 +34,28 @@ export interface ControlLocator {
 }
 
 /** Wording that finishes an application, checked before wording that merely advances. */
-const TERMINAL = /submit application|submit my application|send application|^submit$/i;
-const ADVANCE = /continue|next|save and continue|review|proceed/i;
+export const TERMINAL_CONTROL_NAME =
+  /submit (your |my )?application|send application|^submit$/i;
+export const ADVANCE_CONTROL_NAME = /continue|next|save and continue|review|proceed/i;
 
 /**
  * Deliberately excluded, because they look like progress and are not.
  *
  * "Save and close" reads like a normal advance control and abandons the application;
  * Indeed puts one directly above the real button on every step.
+ *
+ * "Preview next page" is the PDF carousel on Indeed's resume step. A `/next/` name
+ * match was taking that instead of Continue, paging the resume, then stalling.
  */
-const NOT_ADVANCE = /save and close|save for later|cancel|back|previous|sign in|create account/i;
+const NOT_ADVANCE =
+  /save and close|save for later|cancel|back|previous|sign in|create account|preview|carousel|next page|previous page/i;
 
 export function classifyControlLabel(
   label: string,
 ): { advances: boolean; isTerminalSubmit: boolean } {
   const clean = label.trim();
   if (!clean || NOT_ADVANCE.test(clean)) return { advances: false, isTerminalSubmit: false };
-  if (TERMINAL.test(clean)) return { advances: true, isTerminalSubmit: true };
-  if (ADVANCE.test(clean)) return { advances: true, isTerminalSubmit: false };
+  if (TERMINAL_CONTROL_NAME.test(clean)) return { advances: true, isTerminalSubmit: true };
+  if (ADVANCE_CONTROL_NAME.test(clean)) return { advances: true, isTerminalSubmit: false };
   return { advances: false, isTerminalSubmit: false };
 }

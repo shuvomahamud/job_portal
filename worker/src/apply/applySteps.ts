@@ -1,5 +1,6 @@
 import type { FrameLike, LocatorLike, PageLike } from "../browser/playwrightTypes";
 import { detectBrowserBlocker } from "../browser/blockerDetection";
+import { classifyControlLabel, ADVANCE_CONTROL_NAME, TERMINAL_CONTROL_NAME } from "./external/controlLocator";
 
 export type SiteAdapter = {
   source: "indeed" | "dice" | "fixture";
@@ -22,6 +23,45 @@ function firstVisible(locator: LocatorLike): Promise<LocatorLike | null> {
   });
 }
 
+function delay(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function accessibleName(locator: LocatorLike): Promise<string> {
+  const aria = (await locator.getAttribute("aria-label").catch(() => null))?.trim();
+  if (aria) return aria;
+  return (await locator.innerText().catch(() => "")).trim();
+}
+
+export function looksLikeAlreadyApplied(text: string): boolean {
+  return /you['’]?ve already applied|already applied to this job/i.test(text);
+}
+
+export function looksLikeSubmitted(text: string): boolean {
+  return /application (has been )?submitted|thanks for applying|we received your application/i.test(
+    text,
+  );
+}
+
+/**
+ * First visible button whose accessible name matches, after dropping carousel/preview
+ * and abandon controls that a `/next/` regex would otherwise accept.
+ */
+async function firstVisibleAdvance(
+  frame: FrameLike,
+  name: RegExp,
+): Promise<LocatorLike | null> {
+  const locator = frame.getByRole("button", { name });
+  const count = await locator.count().catch(() => 0);
+  for (let index = 0; index < count; index += 1) {
+    const item = locator.nth(index);
+    if (!(await item.isVisible({ timeout: 200 }).catch(() => false))) continue;
+    if (!classifyControlLabel(await accessibleName(item)).advances) continue;
+    return item;
+  }
+  return null;
+}
+
 const indeedAdapter: SiteAdapter = {
   source: "indeed",
   allowedApplyHosts: ["indeed.com", "smartapply.indeed.com"],
@@ -37,21 +77,15 @@ const indeedAdapter: SiteAdapter = {
     return null;
   },
   async findAdvanceControl(frame) {
-    const submit = await firstVisible(
-      frame.getByRole("button", { name: /submit application|submit|send application/i }),
-    );
+    const submit = await firstVisibleAdvance(frame, TERMINAL_CONTROL_NAME);
     if (submit) return { locator: submit, isTerminalSubmit: true };
-    const cont = await firstVisible(
-      frame.getByRole("button", { name: /continue|next|save and continue/i }),
-    );
+    const cont = await firstVisibleAdvance(frame, ADVANCE_CONTROL_NAME);
     if (cont) return { locator: cont, isTerminalSubmit: false };
     return null;
   },
   async detectSuccess(page) {
     const text = await page.locator("body").innerText({ timeout: 2000 }).catch(() => "");
-    return /application (has been )?submitted|thanks for applying|we received your application/i.test(
-      text,
-    );
+    return looksLikeAlreadyApplied(text) || looksLikeSubmitted(text);
   },
   async detectBlocked(page) {
     // Delegates to the shared detector rather than testing for the bare word "captcha".
@@ -76,6 +110,17 @@ const diceAdapter: SiteAdapter = {
   ...indeedAdapter,
   source: "dice",
   allowedApplyHosts: ["dice.com"],
+  async findAdvanceControl(frame) {
+    const submit = await firstVisibleAdvance(frame, TERMINAL_CONTROL_NAME);
+    if (submit) return { locator: submit, isTerminalSubmit: true };
+    const exact = await firstVisibleAdvance(frame, /^(next|continue)$/i);
+    if (exact) return { locator: exact, isTerminalSubmit: false };
+    const labeled = await firstVisibleAdvance(frame, ADVANCE_CONTROL_NAME);
+    if (labeled) return { locator: labeled, isTerminalSubmit: false };
+    const textNext = await firstVisible(frame.getByText(/^(next|continue)$/i));
+    if (textNext) return { locator: textNext, isTerminalSubmit: false };
+    return null;
+  },
   /**
    * Dice needs its own, and inheriting Indeed's was why no Dice application ever started.
    *
@@ -94,15 +139,25 @@ const diceAdapter: SiteAdapter = {
     // Waits rather than checking once. Dice is a single-page app, and tonight's faster
     // pacing cut the settle time that used to paper over a control rendering late; a
     // 200ms glance at a page still assembling itself finds nothing and reports a stall.
-    const easy = page.getByText(/easy apply/i).first();
-    const appeared = await easy
-      .waitFor({ state: "visible", timeout: 8_000 })
-      .then(() => true)
-      .catch(() => false);
-    if (appeared) return easy;
-    return firstVisible(
-      page.locator('a:has-text("Apply Now"), button:has-text("Apply Now")'),
-    );
+    //
+    // A partially completed application replaces Easy Apply with "Continue Application".
+    // Waiting only for Easy Apply then looking for Apply Now never sees that button, so
+    // the run stays on the job page and stalls with no click in the trace.
+    const deadline = Date.now() + 8_000;
+    while (Date.now() < deadline) {
+      const continueApp =
+        (await firstVisible(page.getByRole("button", { name: /continue application/i }))) ??
+        (await firstVisible(page.getByText(/continue application/i)));
+      if (continueApp) return continueApp;
+      const easy = await firstVisible(page.getByText(/easy apply/i));
+      if (easy) return easy;
+      const applyNow = await firstVisible(
+        page.locator('a:has-text("Apply Now"), button:has-text("Apply Now")'),
+      );
+      if (applyNow) return applyNow;
+      await delay(250);
+    }
+    return null;
   },
 };
 

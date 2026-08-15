@@ -11,6 +11,11 @@ import {
 } from "./schemas";
 import { validateOllamaBaseUrl } from "../ai/ollamaClient";
 import { getRiskLevel } from "./riskPolicy";
+import {
+  isHistoricalResumeLocationAnswer,
+  isHistoricalResumeLocationField,
+  historicalLocationAnswers,
+} from "../apply/resumeCards";
 
 async function askOllama(
   settings: MatchSettings,
@@ -44,6 +49,14 @@ async function askOllama(
   return JSON.parse(body.message.content) as unknown;
 }
 
+const IDENTITY_RESIDENCE_CATEGORIES = new Set([
+  "address",
+  "city",
+  "state",
+  "zip",
+  "country",
+]);
+
 /**
  * Lightweight suggestion builder. Ollama enhancement is capped and optional;
  * the apply runner can call enhanceFieldsWithOllama separately when configured.
@@ -53,9 +66,42 @@ export function buildSuggestion(
   answers: SavedAnswer[],
   settings?: MatchSettings,
 ): FieldSuggestion {
-  const match = matchSavedAnswer(field, answers, settings);
+  const eligibleAnswers = isHistoricalResumeLocationField(field)
+    ? historicalLocationAnswers(answers)
+    : answers.filter((answer) => !isHistoricalResumeLocationAnswer(answer));
+
+  // Current residence is job-dependent: NYC postings get South Richmond Hill / 11419,
+  // Capital Region postings get Latham / 12110. A learned "current city of residence"
+  // must not freeze one of those and reuse it on the other.
+  if (
+    !isHistoricalResumeLocationField(field) &&
+    IDENTITY_RESIDENCE_CATEGORIES.has(field.fieldCategory)
+  ) {
+    const fromAddress = eligibleAnswers.find(
+      (answer) => answer.id === `profile:${field.fieldCategory}`,
+    );
+    if (fromAddress) {
+      return {
+        field,
+        match: {
+          fieldId: field.id,
+          savedAnswerId: fromAddress.id,
+          matchType: "rule",
+          confidence: 0.99,
+          reason: "Current residence uses the address nearest the posting.",
+          requiresReview: false,
+        },
+        savedAnswer: fromAddress,
+        suggestedValue: fromAddress.answerValue,
+        source: "rule",
+        requiresReview: false,
+      };
+    }
+  }
+
+  const match = matchSavedAnswer(field, eligibleAnswers, settings);
   const savedAnswer = match
-    ? answers.find((answer) => answer.id === match.savedAnswerId)
+    ? eligibleAnswers.find((answer) => answer.id === match.savedAnswerId)
     : undefined;
   return {
     field,

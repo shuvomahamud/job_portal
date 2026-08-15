@@ -45,6 +45,7 @@ export const SUGGESTED_MATCH_TERMS: Record<string, string[]> = {
     "new york", "new york city", "nyc", "manhattan", "brooklyn", "queens", "bronx",
     "staten island", "long island city", "long island", "jersey city", "newark",
     "hoboken", "yonkers", "white plains", "westchester",
+    "south richmond hill", "richmond hill", "jamaica",
   ],
   albany: [
     "albany", "capital region", "schenectady", "troy", "saratoga springs", "colonie",

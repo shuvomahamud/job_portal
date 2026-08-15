@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   formatQuestionsBody,
   formatQuestionsTitle,
+  formatBrowserBlockedBody,
   type NotifyQuestionsInput,
 } from "../src/notify/channel";
 import { createDesktopChannel, DESKTOP_NOTIFY_PREFIX } from "../src/notify/desktopChannel";
@@ -73,4 +74,23 @@ test("required questions are marked in the body", () => {
   const body = formatQuestionsBody(input(2));
   assert.match(body, /• Question 0 \(required\)/);
   assert.match(body, /• Question 1$/m);
+});
+
+test("CAPTCHA notifications tell the user to resume after solving it", () => {
+  const body = formatBrowserBlockedBody({
+    site: "indeed",
+    kind: "captcha",
+    message: "indeed needs a CAPTCHA solved.",
+  });
+  assert.match(body, /Resume automated apply/);
+  assert.doesNotMatch(body, /Open browser to unblock/);
+});
+
+test("access-denied notifications still point at Open browser to unblock", () => {
+  const body = formatBrowserBlockedBody({
+    site: "indeed",
+    kind: "access_denied",
+    message: "indeed blocked the worker browser.",
+  });
+  assert.match(body, /Open browser to unblock/);
 });

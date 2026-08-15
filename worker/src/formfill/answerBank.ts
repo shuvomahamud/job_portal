@@ -122,8 +122,30 @@ function profileEntry(
     updatedAt: new Date(0).toISOString(),
     riskLevel: getRiskLevel(category),
     notes: "Derived from candidate profile.",
-    aliases: [category.replace(/_/g, " ")],
+    aliases: aliasesForProfileCategory(category),
   };
+}
+
+function aliasesForProfileCategory(category: FieldCategory): string[] {
+  if (category === "city") {
+    return [
+      "city",
+      "current city",
+      "city of residence",
+      "current city of residence",
+      "locality",
+    ];
+  }
+  if (category === "zip") {
+    return ["zip", "zip code", "postal code", "postcode"];
+  }
+  if (category === "state") {
+    return ["state", "state region", "province"];
+  }
+  if (category === "address") {
+    return ["address", "street address", "current address"];
+  }
+  return [category.replace(/_/g, " ")];
 }
 
 export type CandidateFactRow = {
@@ -546,6 +568,63 @@ export async function learnAnswer(
     );
 
   await db.batch([upsert, markPending]);
+}
+
+/**
+ * Stores locations parsed from the resume. A human correction (user_reply / dashboard)
+ * is never overwritten — the resume is only the default when nothing is on file yet.
+ */
+export async function persistResumeLocationAnswers(
+  userId: string,
+  answers: SavedAnswer[],
+  database?: AnswerDb,
+): Promise<number> {
+  if (!answers.length) return 0;
+  const db = dbOrDefault(database);
+  const now = new Date();
+  let written = 0;
+  for (const answer of answers) {
+    const inserted = await db
+      .insert(schema.applicationAnswers)
+      .values({
+        userId,
+        scope: "global",
+        scopeKey: "",
+        normalizedQuestion: answer.normalizedQuestion,
+        originalQuestion: answer.originalQuestion,
+        category: answer.category,
+        answerValue: answer.answerValue,
+        answerType: answer.answerType,
+        optionValue: null,
+        sitePattern: "",
+        domain: "",
+        aliases: [],
+        riskLevel: answer.riskLevel,
+        source: "resume_extraction",
+        usageCount: 0,
+        notes: answer.notes || "Parsed from resume text.",
+        updatedAt: now,
+      })
+      .onConflictDoUpdate({
+        target: [
+          schema.applicationAnswers.userId,
+          schema.applicationAnswers.scope,
+          schema.applicationAnswers.scopeKey,
+          schema.applicationAnswers.normalizedQuestion,
+          schema.applicationAnswers.category,
+        ],
+        set: {
+          answerValue: answer.answerValue,
+          originalQuestion: answer.originalQuestion,
+          notes: answer.notes || "Parsed from resume text.",
+          updatedAt: now,
+        },
+        setWhere: eq(schema.applicationAnswers.source, "resume_extraction"),
+      })
+      .returning({ id: schema.applicationAnswers.id });
+    if (inserted.length) written += 1;
+  }
+  return written;
 }
 
 const UUID_PATTERN =

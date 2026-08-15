@@ -81,3 +81,11 @@ test("still detects an explicit login gate", async () => {
   );
   assert.equal(blocker?.kind, "login_required");
 });
+
+test("detects Indeed's I'm not a robot checkbox wording", async () => {
+  const blocker = await detectBrowserBlocker(
+    page("https://smartapply.indeed.com/beta/indeedapply/form/review", "I'm not a robot"),
+    "indeed",
+  );
+  assert.equal(blocker?.kind, "captcha");
+});

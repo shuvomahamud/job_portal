@@ -3,9 +3,11 @@ import test from "node:test";
 import { matchSavedAnswer } from "../src/formfill/answerMatcher";
 import {
   assembleAnswerBank,
+  addressToSavedAnswers,
   commonAnswerToSavedAnswer,
   profileToSavedAnswers,
 } from "../src/formfill/answerBank";
+import { buildSuggestion } from "../src/formfill/suggestions";
 import type { DetectedField, SavedAnswer } from "../src/formfill/types";
 
 function phoneField(): DetectedField {
@@ -127,4 +129,107 @@ test("application_answers shadow common_answers but not candidate_profile.phone"
     bank.find((answer) => answer.id === salaryMatch?.savedAnswerId)?.answerValue,
     "150000",
   );
+});
+
+test("historical resume cities do not make the current profile city ambiguous", () => {
+  const [profileCity] = profileToSavedAnswers({ city: "Latham" }).filter(
+    (answer) => answer.category === "city",
+  );
+  assert.ok(profileCity);
+  const historicalCities = [
+    saved({
+      id: "fiftytwo-city",
+      normalizedQuestion: "location senior software engineer fiftytwo digital",
+      originalQuestion: "Location for Senior Software Engineer FiftyTwo Digital",
+      category: "city",
+      answerValue: "Copenhagen, Denmark",
+      riskLevel: "LOW",
+    }),
+    saved({
+      id: "mercy-city",
+      normalizedQuestion: "location mercy university",
+      originalQuestion: "Location for Mercy University",
+      category: "city",
+      answerValue: "Dobbs Ferry, New York",
+      riskLevel: "LOW",
+    }),
+  ];
+  const field: DetectedField = {
+    ...phoneField(),
+    id: "current-city",
+    selector: "#current-city",
+    inputType: "text",
+    labelText: "What is your current city of residence?",
+    normalizedQuestion: "current city residence",
+    name: "current-city",
+    idAttribute: "current-city",
+    fieldCategory: "city",
+    confidence: 0.98,
+  };
+
+  const suggestion = buildSuggestion(field, [profileCity, ...historicalCities]);
+  assert.equal(suggestion.savedAnswer?.id, "profile:city");
+  assert.equal(suggestion.suggestedValue, "Latham");
+  assert.equal(suggestion.match?.matchType, "rule");
+});
+
+test("current city of residence uses the address nearer the posting, not a learned city", () => {
+  const currentCity: DetectedField = {
+    ...phoneField(),
+    id: "current-city",
+    selector: "#current-city",
+    inputType: "text",
+    labelText: "What is your current city of residence?",
+    normalizedQuestion: "current city residence",
+    name: "current-city",
+    idAttribute: "current-city",
+    fieldCategory: "city",
+    confidence: 0.98,
+  };
+  const learnedLatham = saved({
+    id: "learned-current-city",
+    normalizedQuestion: "current city residence",
+    originalQuestion: "What is your current city of residence?",
+    category: "city",
+    answerValue: "Latham",
+    riskLevel: "LOW",
+  });
+  const nyc = addressToSavedAnswers(
+    [
+      {
+        id: "latham",
+        label: "Latham",
+        line1: "44 Omega Ter",
+        line2: null,
+        city: "Latham",
+        stateRegion: "NY",
+        postalCode: "12110",
+        country: "United States",
+        isPrimary: true,
+        matchTerms: ["latham", "albany"],
+      },
+      {
+        id: "queens",
+        label: "South Richmond Hill",
+        line1: "10535 130th St",
+        line2: null,
+        city: "South Richmond Hill",
+        stateRegion: "NY",
+        postalCode: "11419",
+        country: "United States",
+        isPrimary: false,
+        matchTerms: ["south richmond hill", "queens", "new york", "nyc"],
+      },
+    ],
+    { location: "New York, NY, US" },
+  );
+  const nycCity = nyc.answers.find((answer) => answer.category === "city");
+  const nycZip = nyc.answers.find((answer) => answer.category === "zip");
+  assert.equal(nyc.label, "South Richmond Hill");
+  assert.equal(nycCity?.answerValue, "South Richmond Hill");
+  assert.equal(nycZip?.answerValue, "11419");
+
+  const suggestion = buildSuggestion(currentCity, [...nyc.answers, learnedLatham]);
+  assert.equal(suggestion.savedAnswer?.id, "profile:city");
+  assert.equal(suggestion.suggestedValue, "South Richmond Hill");
 });

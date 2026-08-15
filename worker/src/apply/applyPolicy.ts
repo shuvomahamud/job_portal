@@ -9,6 +9,7 @@ import type {
   MatchType,
   SavedAnswer,
 } from "../formfill/types";
+import { isHistoricalResumeLocationField } from "./resumeCards";
 
 export type ApplyMode = "dry_run" | "fill_only" | "fill_and_submit";
 
@@ -57,6 +58,22 @@ export function decideFieldAction(input: DecideFieldInput): FieldAction {
       return { kind: "fill", value: suggestedValue, source: matchType ?? "rule" };
     }
     return { kind: "ask", reason: "Answer does not match available options." };
+  }
+
+  if (isHistoricalResumeLocationField(field)) {
+    const specific =
+      Boolean(value) &&
+      matchType &&
+      ["exact", "normalized", "alias"].includes(matchType) &&
+      !savedAnswer?.id.startsWith("profile:");
+    if (specific && value && matchType) {
+      return { kind: "fill", value, source: matchType };
+    }
+    return {
+      kind: "ask",
+      reason:
+        "Historical job/education location requires a saved answer; the current profile address is not used.",
+    };
   }
 
   const isAuthorizedJobSalary =

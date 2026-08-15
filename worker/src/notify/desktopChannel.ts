@@ -10,6 +10,7 @@ import {
   formatQuestionsBody,
   formatQuestionsTitle,
   formatBrowserBlockedTitle,
+  formatBrowserBlockedBody,
   type NotificationChannel,
   type NotifyAnswerAcceptedInput,
   type NotifyQuestionsInput,
@@ -42,7 +43,7 @@ export function createDesktopChannel(): NotificationChannel {
       emit("Apply run finished", parts.join(" · "));
     },
     async notifyBrowserBlocked(input: NotifyBrowserBlockedInput) {
-      emit(formatBrowserBlockedTitle(input.kind), `${input.message}\nOpen the dashboard and choose “Open browser to unblock”.`);
+      emit(formatBrowserBlockedTitle(input.kind), formatBrowserBlockedBody(input));
     },
   };
 }

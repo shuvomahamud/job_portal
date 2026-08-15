@@ -141,6 +141,13 @@ export function detectFieldBasesInPage(): FieldBase[] {
   function isVisible(element: HTMLElement): boolean {
     if (element.hidden || element.getAttribute("aria-hidden") === "true") return false;
     if (element.closest("[hidden]")) return false;
+    const input = element as HTMLInputElement;
+    // Custom resume widgets keep the native file input in the tree at opacity 0.
+    // Treating that as invisible meant the upload was skipped, then a later detect
+    // pass found a different positional input that was not attached.
+    if (input.type === "file") {
+      return !input.disabled;
+    }
     const style = getComputedStyle(element);
     if (
       style.display === "none" ||
@@ -149,7 +156,6 @@ export function detectFieldBasesInPage(): FieldBase[] {
     ) {
       return false;
     }
-    const input = element as HTMLInputElement;
     if (input.type === "hidden") return false;
     return true;
   }
@@ -165,6 +171,14 @@ export function detectFieldBasesInPage(): FieldBase[] {
 
   function uniqueSelector(element: HTMLElement): string {
     if (element.id) return `#${cssEscape(element.id)}`;
+    if (element instanceof HTMLInputElement && element.type === "file") {
+      if (element.name) {
+        const named = `input[type="file"][name="${cssEscape(element.name)}"]`;
+        if (queryRoot(element).querySelectorAll(named).length === 1) return named;
+      }
+      const files = queryRoot(element).querySelectorAll('input[type="file"]');
+      if (files.length === 1) return 'input[type="file"]';
+    }
     if (
       element instanceof HTMLInputElement &&
       ["radio", "checkbox"].includes(element.type) &&
@@ -354,7 +368,7 @@ export function detectFieldBasesInPage(): FieldBase[] {
  * nested `function` declarations become `__name(fn, "fn")` calls that do not
  * exist in the browser — polyfill `__name` and eval the source as a string.
  */
-async function evaluatePageFunction<R>(frame: FrameLike, fn: () => R): Promise<R> {
+export async function evaluatePageFunction<R>(frame: FrameLike, fn: () => R): Promise<R> {
   return frame.evaluate(
     `(() => { const __name = (target) => target; return (${fn.toString()})(); })()`,
   );

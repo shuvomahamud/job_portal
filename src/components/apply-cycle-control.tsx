@@ -177,9 +177,16 @@ export function ApplyCycleControl({
                     {blocker.site} needs your attention
                   </p>
                   <p className="mt-1 text-sm text-amber-800">{blocker.message}</p>
+                  {(blocker.kind === "captcha" || blocker.kind === "login_required") && (
+                    <p className="mt-1 text-sm text-amber-800">
+                      The apply is paused on that page. Solve it in JobAgent Chrome, then click
+                      Resume automated apply.
+                    </p>
+                  )}
                 </div>
               </div>
               <div className="flex flex-wrap items-center gap-2">
+                {blocker.kind !== "captcha" && blocker.kind !== "login_required" && (
                 <button
                   type="button"
                   className="primary-button"
@@ -193,6 +200,7 @@ export function ApplyCycleControl({
                   )}
                   Open browser to unblock
                 </button>
+                )}
                 {/*
                   The way out when the worker is wrong or the page is gone. Verification
                   cannot clear an alert raised in error, and applying stands down while any

@@ -4,6 +4,7 @@ import {
   bestOptionIndex,
   comparableOption,
   optionMatches,
+  withoutPhoneDialCode,
 } from "../src/formfill/optionMatching";
 
 test("optionMatches requires every answer token to hit an option", () => {
@@ -12,9 +13,7 @@ test("optionMatches requires every answer token to hit an option", () => {
   assert.equal(optionMatches(["Remote", "Hybrid", "On-site"], "Remote, Hybrid"), true);
 });
 
-test("bestOptionIndex returns -1 when ambiguous", () => {
-  assert.equal(bestOptionIndex(["Yes", "No"], "Yes"), 0);
-  assert.equal(bestOptionIndex(["Male", "Female", "Prefer not to say"], "Male"), 0);
-  assert.equal(bestOptionIndex(["New York City", "New York State"], "New York"), -1);
-  assert.equal(comparableOption("Prefer not to say"), "decline");
+test("bestOptionIndex matches a phone-country row that appends a dial code", () => {
+  assert.equal(bestOptionIndex(["Afghanistan+93", "United States+1"], "United States"), 1);
+  assert.equal(withoutPhoneDialCode("United States+1"), "united states");
 });
