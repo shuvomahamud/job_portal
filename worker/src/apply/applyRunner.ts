@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { and, desc, eq, inArray, or } from "drizzle-orm";
 import * as schema from "../../../src/db/schema";
-import type { BrowserContextLike, PageLike } from "../browser/playwrightTypes";
+import type { BrowserContextLike, FrameLike, PageLike } from "../browser/playwrightTypes";
 import { getConfig, sleep } from "../config";
 import { addCommandEvent, getCommandStatus, getWorkerDb } from "../db";
 import { loadAnswerBankWithContext, markAnswersUsed } from "../formfill/answerBank";
@@ -45,7 +45,7 @@ import {
 } from "./external/externalApply";
 import { decideSubmission } from "./external/submissionGuard";
 import { withOllamaLock } from "../ai/ollamaLock";
-import { fillDetectedField } from "./fillField";
+import { fillDetectedField, type HumanTyping } from "./fillField";
 import {
   createHumanTyping,
   interFieldDelayMs,
@@ -122,6 +122,94 @@ export type ApplyJobInput = {
 
 function shortId(): string {
   return randomBytes(4).toString("hex");
+}
+
+/** Wording sites use for a step that is genuinely still working, not stuck. */
+const TRANSIENT_LOAD_TEXT = /preparing (your )?review|please wait|processing your|submitting your|loading\b|one moment/i;
+
+/**
+ * True when the page looks like it is mid-transition rather than actually refusing to
+ * advance.
+ *
+ * Found live on Indeed: a "Preparing review" screen carries no fillable fields at all, so
+ * its fingerprint is identical to the previous step's — indistinguishable, by field
+ * content alone, from a form that silently rejected the click. The stall check fires on
+ * the very first repeat, so without this a transient loading screen was condemned before
+ * it had a chance to finish loading.
+ */
+export async function looksLikeTransientLoad(frame: FrameLike): Promise<boolean> {
+  const spinner = frame.locator(
+    '[role="progressbar"], [class*="spinner" i], [class*="loading" i][aria-hidden="false"]',
+  );
+  if ((await spinner.count().catch(() => 0)) > 0) {
+    if (await spinner.first().isVisible({ timeout: 500 }).catch(() => false)) return true;
+  }
+  return (await frame.getByText(TRANSIENT_LOAD_TEXT).count().catch(() => 0)) > 0;
+}
+
+export type IdentityCheck =
+  | { verified: true; corrected: boolean }
+  | { verified: false; reason: string };
+
+/**
+ * Confirms the name about to be submitted is actually the candidate's, and fixes it when
+ * it is not and can be.
+ *
+ * Found live: an Indeed application resumed past the contact-info step — the site
+ * remembers progress across a retry — so the run never revisited the page holding the
+ * name fields, and a stale value from the Indeed account's own profile went out
+ * unexamined. The existing fill-time fix (clear before typing) only ever helps on a run
+ * that actually reaches that page.
+ *
+ * So this is not a fill-time fix, it is a pre-submit gate, and it runs regardless of
+ * which step happened to hold the name fields this time. Three outcomes: editable name
+ * fields are on the current page and already correct — verified. They are on the page and
+ * wrong — corrected in place. Neither editable fields nor matching visible text can be
+ * found — refused, because submitting a name that cannot be confirmed is worse than
+ * holding the application for a person.
+ */
+export async function verifyIdentityBeforeSubmit(
+  frame: FrameLike,
+  fields: DetectedField[],
+  human: HumanTyping,
+  expectedFirstName: string | null,
+  expectedLastName: string | null,
+): Promise<IdentityCheck> {
+  if (!expectedFirstName && !expectedLastName) {
+    // No profile name on file at all is a data problem for the profile page, not
+    // something this run can resolve mid-application.
+    return { verified: false, reason: "No first or last name is on file to verify against." };
+  }
+
+  const firstField = fields.find((f) => f.fieldCategory === "first_name");
+  const lastField = fields.find((f) => f.fieldCategory === "last_name");
+
+  if (firstField || lastField) {
+    let corrected = false;
+    if (expectedFirstName && firstField && firstField.currentValue.trim() !== expectedFirstName) {
+      await fillDetectedField(frame, firstField, expectedFirstName, human);
+      corrected = true;
+    }
+    if (expectedLastName && lastField && lastField.currentValue.trim() !== expectedLastName) {
+      await fillDetectedField(frame, lastField, expectedLastName, human);
+      corrected = true;
+    }
+    return { verified: true, corrected };
+  }
+
+  // No editable fields on this page — likely a review screen after a resumed flow.
+  // Fall back to visible text: if the expected name appears verbatim, that is real
+  // confirmation, not a guess.
+  const fullName = [expectedFirstName, expectedLastName].filter(Boolean).join(" ").trim();
+  if (fullName) {
+    const found = await frame.getByText(fullName, { exact: false }).count().catch(() => 0);
+    if (found > 0) return { verified: true, corrected: false };
+  }
+
+  return {
+    verified: false,
+    reason: "Could not find an editable name field or matching name text to confirm before submitting.",
+  };
 }
 
 function fieldFingerprint(fields: DetectedField[], frameUrl: string): string {
@@ -412,6 +500,16 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
   }
 
   let resumePath: string | null = null;
+  // Set once the upload genuinely succeeds, and never attempted again after that. Dice
+  // rerenders its page once a resume is attached — the widget replaces itself with a
+  // preview — and the field detector then reports a second file input at a fresh
+  // positional selector. Re-running setInputFiles against it waits for an element that is
+  // never going to become attached and enabled, and times out at 30s, which used to take
+  // the whole application down with it: no try/catch wrapped the call, so the failure
+  // propagated out of the step loop entirely.
+  let resumeUploaded = false;
+  /** Distinguishes "no resume field on this form" from "the field is there and empty". */
+  let sawResumeUploadField = false;
   const resumeVersionId = selected.resumeVersionId;
   if (resumeVersionId) {
     try {
@@ -613,6 +711,11 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
       visaSignal: input.job.visaSignal,
     });
     const answers = bank.answers;
+    // The profile's own name, for the identity check right before submit. Read from the
+    // same answer bank everything else uses rather than a fresh profile fetch, so this
+    // can never disagree with what the rest of the run considers correct.
+    const expectedFirstName = answers.find((a) => a.category === "first_name")?.answerValue?.trim() || null;
+    const expectedLastName = answers.find((a) => a.category === "last_name")?.answerValue?.trim() || null;
     if (bank.addressLabel) {
       // Logged as well as recorded: command events only reach the dashboard, while the
       // JobAgent activity log mirrors this process's stdout. Both decisions below put
@@ -677,6 +780,9 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
     let stallRetries = 0;
     /** Set after clicking to advance, so an unchanged page next round means the form refused. */
     let clickedWithoutProgress = false;
+    /** Consecutive steps spent waiting out a loading screen, bounded so a page that is
+     *  genuinely stuck — not just slow — still reaches the ordinary stall verdict. */
+    let loadingGrace = 4;
 
     for (let step = 0; step < cfg.JOB_APPLY_MAX_STEPS; step += 1) {
       if (await isApplyPaused(input.userId)) {
@@ -767,6 +873,17 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
       // Retrying was pointless and hid the cause. It clicked Continue for every remaining
       // step and then reported "max_steps", which reads like a timeout and says nothing
       // about the four unanswered questions that were the actual problem.
+      if (
+        clickedWithoutProgress &&
+        fingerprint === previousFingerprint &&
+        loadingGrace > 0 &&
+        (await looksLikeTransientLoad(frame))
+      ) {
+        loadingGrace -= 1;
+        await sleep(1_500);
+        continue;
+      }
+
       if (clickedWithoutProgress && fingerprint === previousFingerprint) {
         const unanswered = fields.filter(
           (field) => field.required && !String(field.currentValue ?? "").trim(),
@@ -842,10 +959,30 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
           if (
             field.fieldCategory === "resume_upload" &&
             resumePath &&
-            field.inputType === "file"
+            field.inputType === "file" &&
+            !resumeUploaded &&
+            // The detector's own signal that this particular input already has a file,
+            // in case a stale duplicate is sitting alongside the live one this step.
+            field.currentValue !== "File selected"
           ) {
-            await frame.locator(field.selector).first().setInputFiles(resumePath);
+            try {
+              await frame.locator(field.selector).first().setInputFiles(resumePath, {
+                timeout: 10_000,
+              });
+              resumeUploaded = true;
+            } catch (error) {
+              // Not fatal. The submission guard already refuses to submit without
+              // resumeAttached, so a failed upload here is caught at the right place —
+              // held for a person — rather than taking the whole application down.
+              logger.warn("Resume upload failed; continuing without it", {
+                jobId: input.job.id,
+                error: error instanceof Error ? error.message : String(error),
+              });
+            }
+          } else if (field.fieldCategory === "resume_upload" && field.currentValue === "File selected") {
+            resumeUploaded = true;
           }
+          if (field.fieldCategory === "resume_upload") sawResumeUploadField = true;
           continue;
         }
 
@@ -999,6 +1136,43 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
       }
 
       if (advance.isTerminalSubmit) {
+        // Checked on every site, not only employer ones — the bug this closes was found on
+        // Indeed. A resumed application can land past the contact-info step entirely, so
+        // the run that is about to submit may never have visited the page holding the name
+        // fields this time; a stale value from the board's own account profile would go
+        // out unexamined.
+        if (mode === "fill_and_submit") {
+          const identity = await verifyIdentityBeforeSubmit(
+            frame,
+            fields,
+            human,
+            expectedFirstName,
+            expectedLastName,
+          );
+          if (!identity.verified) {
+            await upsertApplication({
+              userId: input.userId,
+              jobId: input.job.id,
+              status: "needs_manual",
+              stopReason: identity.reason,
+            });
+            await addCommandEvent(input.commandId, "identity_unverified", identity.reason, {
+              jobId: input.job.id,
+              url: frame.url(),
+            });
+            await finishTrace(artifactCtx, true);
+            return { stopReason: "needs_manual", applicationId: application.id, artifacts: artifactCtx.paths };
+          }
+          if (identity.corrected) {
+            // One action before an irreversible click. Re-scan next iteration and confirm
+            // clean rather than clicking submit in the same pass as the fix.
+            previousFingerprint = fingerprint;
+            clickedWithoutProgress = false;
+            await sleep(fixture ? 10 : interFieldDelayMs(random));
+            continue;
+          }
+        }
+
         // The last check before something that cannot be taken back, and only on employer
         // sites — the boards keep the checks they already had. A model may have found this
         // button; it does not get to decide that it may be pressed.
@@ -1010,7 +1184,11 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
             blocked: false,
             proposedByModel: external?.proposedByModel ?? false,
             looksTerminal: advance.isTerminalSubmit,
-            resumeAttached: Boolean(resumePath),
+            // Whether the upload actually succeeded, not merely whether a resume was
+            // available to try. A form that never showed a resume field at all — some
+            // employer sites pull it from an existing profile — is not held for this;
+            // one that showed the field and never got a file into it is.
+            resumeAttached: resumeUploaded || !sawResumeUploadField,
             score: match?.score ?? null,
             minScore: cfg.JOB_APPLY_EXTERNAL_MIN_SCORE,
           });
