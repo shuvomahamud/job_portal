@@ -16,7 +16,7 @@ test("extractIndeedMetadata reads title and company from encoded Indeed URLs", (
   const metadata = extractIndeedMetadata("https://www.indeed.com/rc/clk?jk=abc123&amp;cmp=Acme+Corp&amp;ti=Senior+.NET+Developer&amp;vjk=tracking");
   assert.equal(metadata.title, "Senior .NET Developer");
   assert.equal(metadata.company, "Acme Corp");
-  assert.equal(metadata.sourceUrl, "https://www.indeed.com/rc/clk?jk=abc123&cmp=Acme+Corp&ti=Senior+.NET+Developer&vjk=tracking");
+  assert.equal(metadata.sourceUrl, "https://www.indeed.com/viewjob?jk=abc123");
 });
 
 test("extractJsonLdJobPosting reads JobPosting fields", () => {
@@ -66,7 +66,7 @@ test("extractJobDetail merges URL metadata, JSON-LD, text signals, and fallback 
 
   assert.equal(detail.title, "Senior .NET Developer");
   assert.equal(detail.company, "Digital Dhara");
-  assert.equal(detail.sourceUrl, "https://www.indeed.com/rc/clk?jk=abc123&cmp=Digital+Dhara&ti=Senior+.NET+Developer");
+  assert.equal(detail.sourceUrl, "https://www.indeed.com/viewjob?jk=abc123");
   assert.equal(detail.employmentType, "w2-contract");
   assert.equal(detail.visaSignal, "h1b_transfer_explicit");
   assert.deepEqual(detail.techStack, [".NET", "C#", "SQL", "Production Support"]);

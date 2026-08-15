@@ -116,7 +116,7 @@ test("a challenge on the page stops the click", () => {
 // ---- control labels ----
 
 test("a control that abandons the application is never treated as progress", async () => {
-  const { classifyControlLabel } = await import("../src/apply/external/controlLocator");
+  const { classifyControlLabel } = await import("../src/apply/external/controlLocator.js");
   // Indeed puts "Save and close" directly above the real button on every step. It reads
   // like an advance control and throws the application away.
   assert.deepEqual(classifyControlLabel("Save and close"), {
@@ -130,7 +130,7 @@ test("a control that abandons the application is never treated as progress", asy
 });
 
 test("finishing is told apart from advancing", async () => {
-  const { classifyControlLabel } = await import("../src/apply/external/controlLocator");
+  const { classifyControlLabel } = await import("../src/apply/external/controlLocator.js");
   assert.deepEqual(classifyControlLabel("Submit application"), {
     advances: true,
     isTerminalSubmit: true,
@@ -142,7 +142,7 @@ test("finishing is told apart from advancing", async () => {
 });
 
 test("an unrecognised label is not guessed at", async () => {
-  const { classifyControlLabel } = await import("../src/apply/external/controlLocator");
+  const { classifyControlLabel } = await import("../src/apply/external/controlLocator.js");
   // Better to escalate to the model than to click something unknown on a real employer's
   // form.
   assert.equal(classifyControlLabel("Learn more").advances, false);
@@ -155,7 +155,7 @@ test("an http CDP endpoint is turned into the websocket address Stagehand needs"
   // Stagehand rejects the http endpoint with a bare "Unexpected server response: 404",
   // which says nothing about wanting a ws:// address. Worth pinning so nobody rediscovers
   // that the slow way.
-  const { resolveCdpWebSocketUrl } = await import("../src/apply/external/stagehandLocator");
+  const { resolveCdpWebSocketUrl } = await import("../src/apply/external/stagehandLocator.js");
   const original = globalThis.fetch;
   globalThis.fetch = (async () =>
     new Response(

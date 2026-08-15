@@ -3,7 +3,13 @@ import { and, desc, eq, inArray, or } from "drizzle-orm";
 import * as schema from "../../../src/db/schema";
 import type { BrowserContextLike, FrameLike, PageLike } from "../browser/playwrightTypes";
 import { getConfig, sleep } from "../config";
-import { addCommandEvent, getCommandStatus, getWorkerDb } from "../db";
+import { addCommandEvent, getCandidateProfileForUser, getWorkerDb } from "../db";
+import {
+  applyShouldHalt,
+  clearInFlightApply,
+  markInFlightSubmitting,
+  trackInFlightApply,
+} from "../workerAbort";
 import { loadAnswerBankWithContext, markAnswersUsed } from "../formfill/answerBank";
 import {
   detectFields,
@@ -144,12 +150,169 @@ export async function looksLikeTransientLoad(frame: FrameLike): Promise<boolean>
   if ((await spinner.count().catch(() => 0)) > 0) {
     if (await spinner.first().isVisible({ timeout: 500 }).catch(() => false)) return true;
   }
-  return (await frame.getByText(TRANSIENT_LOAD_TEXT).count().catch(() => 0)) > 0;
+  const loadText = frame.getByText(TRANSIENT_LOAD_TEXT);
+  if ((await loadText.count().catch(() => 0)) > 0) {
+    return loadText.first().isVisible({ timeout: 500 }).catch(() => false);
+  }
+  return false;
+}
+
+export const TRANSIENT_LOAD_BUDGET_MS = 8_000;
+export const TRANSIENT_LOAD_POLL_MS = 1_500;
+
+/**
+ * Waits out a loading screen on a clock, not by burning logical form steps.
+ *
+ * Indeed's "Preparing review" overlay used to `continue` the apply loop four times at
+ * 1.5s each, which consumed four of the default eight `JOB_APPLY_MAX_STEPS`. A review
+ * page that finished loading on the last poll then had no steps left to process it.
+ */
+export async function waitOutTransientLoad(
+  frame: FrameLike,
+  options?: {
+    budgetMs?: number;
+    pollMs?: number;
+    sleep?: (ms: number) => Promise<void>;
+    shouldHalt?: () => Promise<boolean>;
+  },
+): Promise<"cleared" | "timeout" | "aborted"> {
+  const budgetMs = options?.budgetMs ?? TRANSIENT_LOAD_BUDGET_MS;
+  const pollMs = options?.pollMs ?? TRANSIENT_LOAD_POLL_MS;
+  const sleepFn = options?.sleep ?? sleep;
+  const deadline = Date.now() + budgetMs;
+  while (await looksLikeTransientLoad(frame)) {
+    if (options?.shouldHalt && (await options.shouldHalt())) return "aborted";
+    if (Date.now() >= deadline) return "timeout";
+    await sleepFn(pollMs);
+  }
+  return "cleared";
+}
+
+/**
+ * After a loading overlay clears, the review page often still has no fillable fields and
+ * the same URL as the spinner — so the field fingerprint does not change. Submit is a
+ * button, not a field, and is not in that fingerprint. A successful wait must not be
+ * treated as "the form refused to advance."
+ */
+export function shouldTreatPageAsUnchangedStall(input: {
+  clickedWithoutProgress: boolean;
+  fingerprint: string;
+  previousFingerprint: string;
+  justClearedTransientLoad: boolean;
+}): boolean {
+  if (input.justClearedTransientLoad) return false;
+  return input.clickedWithoutProgress && input.fingerprint === input.previousFingerprint;
 }
 
 export type IdentityCheck =
   | { verified: true; corrected: boolean }
   | { verified: false; reason: string };
+
+function collapseWs(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+export function contactNameMatchesExpected(
+  contactName: string,
+  first: string | null,
+  last: string | null,
+): boolean {
+  const got = collapseWs(contactName).toLowerCase();
+  const expected = collapseWs([first, last].filter(Boolean).join(" ")).toLowerCase();
+  return Boolean(expected) && got === expected;
+}
+
+/**
+ * Reads the dedicated Name / Contact information value on a review page.
+ *
+ * Whole-page text search is not safe: the resume filename often contains the legal name
+ * while the contact row still shows an account nickname. Hidden nodes are excluded
+ * because this walks getComputedStyle / bounding boxes.
+ */
+const READ_REVIEW_CONTACT_NAME_SCRIPT = `(() => {
+  const LABEL = /^(name|full name|legal name|contact name)$/i;
+  function visible(el) {
+    if (!(el instanceof Element)) return false;
+    const style = getComputedStyle(el);
+    if (style.display === "none" || style.visibility === "hidden" || Number(style.opacity) === 0) return false;
+    const box = el.getBoundingClientRect();
+    return box.width > 0 && box.height > 0;
+  }
+  function ownDirectText(el) {
+    return Array.from(el.childNodes)
+      .filter((node) => node.nodeType === Node.TEXT_NODE)
+      .map((node) => (node.textContent || "").replace(/\\s+/g, " ").trim())
+      .filter(Boolean)
+      .join(" ");
+  }
+  function firstLine(value) {
+    return value.split("\\n").map((line) => line.trim()).filter(Boolean)[0] || "";
+  }
+  function plausibleName(value) {
+    const text = firstLine(value).replace(/\\s+/g, " ").trim();
+    if (!text || text.length > 80) return "";
+    if (/\\.pdf\\b|resume|curriculum|\\bcv\\b/i.test(text)) return "";
+    if (text.includes("@")) return "";
+    return text;
+  }
+  const hits = [];
+  for (const el of document.querySelectorAll("body *")) {
+    if (!visible(el)) continue;
+    const leaf = ownDirectText(el) || (el.childElementCount === 0 ? (el.textContent || "").trim() : "");
+    const collapsed = leaf.replace(/\\s+/g, " ").trim();
+    if (!LABEL.test(collapsed)) continue;
+    let value = "";
+    if (el.nextElementSibling && visible(el.nextElementSibling)) {
+      value = plausibleName(el.nextElementSibling.innerText || "");
+    }
+    if (!value && el.parentElement && visible(el.parentElement)) {
+      const parentText = (el.parentElement.innerText || "").replace(/\\s+/g, " ").trim();
+      if (parentText.toLowerCase().startsWith(collapsed.toLowerCase())) {
+        value = plausibleName(parentText.slice(collapsed.length));
+      }
+    }
+    if (value) hits.push(value);
+  }
+  return hits[0] || null;
+})()`;
+
+export async function readReviewContactName(frame: FrameLike): Promise<string | null> {
+  const value = await frame.evaluate(READ_REVIEW_CONTACT_NAME_SCRIPT).catch(() => null);
+  if (typeof value !== "string") return null;
+  const trimmed = collapseWs(value);
+  return trimmed || null;
+}
+
+async function readFieldValue(frame: FrameLike, field: DetectedField): Promise<string | null> {
+  const live = await frame
+    .locator(field.selector)
+    .first()
+    .inputValue({ timeout: 1000 })
+    .catch(() => null);
+  return live;
+}
+
+async function confirmNameField(
+  frame: FrameLike,
+  field: DetectedField,
+  expected: string,
+  human: HumanTyping,
+  label: string,
+): Promise<{ ok: boolean; corrected: boolean; reason?: string }> {
+  const live = await readFieldValue(frame, field);
+  const before = collapseWs(live && live.trim() ? live : field.currentValue);
+  if (before === expected) return { ok: true, corrected: false };
+  await fillDetectedField(frame, field, expected, human);
+  const after = collapseWs((await readFieldValue(frame, field)) ?? "");
+  if (after !== expected) {
+    return {
+      ok: false,
+      corrected: true,
+      reason: `Could not confirm ${label} after correcting the field.`,
+    };
+  }
+  return { ok: true, corrected: true };
+}
 
 /**
  * Confirms the name about to be submitted is actually the candidate's, and fixes it when
@@ -161,12 +324,12 @@ export type IdentityCheck =
  * unexamined. The existing fill-time fix (clear before typing) only ever helps on a run
  * that actually reaches that page.
  *
- * So this is not a fill-time fix, it is a pre-submit gate, and it runs regardless of
- * which step happened to hold the name fields this time. Three outcomes: editable name
- * fields are on the current page and already correct — verified. They are on the page and
- * wrong — corrected in place. Neither editable fields nor matching visible text can be
- * found — refused, because submitting a name that cannot be confirmed is worse than
- * holding the application for a person.
+ * Expected names come from the candidate profile, not the answer bank: job/company
+ * answers precede profile answers, so a stale learned name must not become the
+ * "correct" name. Every configured component (first, last, or both) must be confirmed
+ * via a visible field readback. When a component has no field — typical on a review
+ * page — confirmation must come from a dedicated Name / Contact information row, not
+ * from searching the whole page (a resume filename is not a contact name).
  */
 export async function verifyIdentityBeforeSubmit(
   frame: FrameLike,
@@ -175,7 +338,9 @@ export async function verifyIdentityBeforeSubmit(
   expectedFirstName: string | null,
   expectedLastName: string | null,
 ): Promise<IdentityCheck> {
-  if (!expectedFirstName && !expectedLastName) {
+  const first = expectedFirstName?.trim() || null;
+  const last = expectedLastName?.trim() || null;
+  if (!first && !last) {
     // No profile name on file at all is a data problem for the profile page, not
     // something this run can resolve mid-application.
     return { verified: false, reason: "No first or last name is on file to verify against." };
@@ -183,33 +348,37 @@ export async function verifyIdentityBeforeSubmit(
 
   const firstField = fields.find((f) => f.fieldCategory === "first_name");
   const lastField = fields.find((f) => f.fieldCategory === "last_name");
+  let corrected = false;
 
-  if (firstField || lastField) {
-    let corrected = false;
-    if (expectedFirstName && firstField && firstField.currentValue.trim() !== expectedFirstName) {
-      await fillDetectedField(frame, firstField, expectedFirstName, human);
-      corrected = true;
-    }
-    if (expectedLastName && lastField && lastField.currentValue.trim() !== expectedLastName) {
-      await fillDetectedField(frame, lastField, expectedLastName, human);
-      corrected = true;
-    }
-    return { verified: true, corrected };
+  if (first && firstField) {
+    const result = await confirmNameField(frame, firstField, first, human, "first name");
+    if (!result.ok) return { verified: false, reason: result.reason! };
+    corrected = corrected || result.corrected;
+  }
+  if (last && lastField) {
+    const result = await confirmNameField(frame, lastField, last, human, "last name");
+    if (!result.ok) return { verified: false, reason: result.reason! };
+    corrected = corrected || result.corrected;
   }
 
-  // No editable fields on this page — likely a review screen after a resumed flow.
-  // Fall back to visible text: if the expected name appears verbatim, that is real
-  // confirmation, not a guess.
-  const fullName = [expectedFirstName, expectedLastName].filter(Boolean).join(" ").trim();
-  if (fullName) {
-    const found = await frame.getByText(fullName, { exact: false }).count().catch(() => 0);
-    if (found > 0) return { verified: true, corrected: false };
+  const missingStructuredComponent = Boolean((first && !firstField) || (last && !lastField));
+  if (missingStructuredComponent) {
+    const structured = await readReviewContactName(frame);
+    if (!structured) {
+      return {
+        verified: false,
+        reason: "Could not find a Name / Contact information row to confirm before submitting.",
+      };
+    }
+    if (!contactNameMatchesExpected(structured, first, last)) {
+      return {
+        verified: false,
+        reason: `Contact name "${structured}" does not match the candidate profile.`,
+      };
+    }
   }
 
-  return {
-    verified: false,
-    reason: "Could not find an editable name field or matching name text to confirm before submitting.",
-  };
+  return { verified: true, corrected };
 }
 
 function fieldFingerprint(fields: DetectedField[], frameUrl: string): string {
@@ -552,9 +721,14 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
   });
   await startTrace(artifactCtx);
   let submittingWritten = false;
+  trackInFlightApply({
+    commandId: input.commandId,
+    userId: input.userId,
+    jobId: input.job.id,
+  });
 
   try {
-    if (await getCommandStatus(input.commandId) === "canceled") {
+    if (await applyShouldHalt(input.commandId)) {
       await upsertApplication({
         userId: input.userId,
         jobId: input.job.id,
@@ -711,11 +885,13 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
       visaSignal: input.job.visaSignal,
     });
     const answers = bank.answers;
-    // The profile's own name, for the identity check right before submit. Read from the
-    // same answer bank everything else uses rather than a fresh profile fetch, so this
-    // can never disagree with what the rest of the run considers correct.
-    const expectedFirstName = answers.find((a) => a.category === "first_name")?.answerValue?.trim() || null;
-    const expectedLastName = answers.find((a) => a.category === "last_name")?.answerValue?.trim() || null;
+    // Authoritative name for the pre-submit identity gate. The answer bank is ordered
+    // job → company → profile, so a stale learned first_name would otherwise beat the
+    // candidate profile. This check is about who is being submitted, not what a prior
+    // form once accepted.
+    const profile = await getCandidateProfileForUser(input.userId);
+    const expectedFirstName = profile?.firstName?.trim() || null;
+    const expectedLastName = profile?.lastName?.trim() || null;
     if (bank.addressLabel) {
       // Logged as well as recorded: command events only reach the dashboard, while the
       // JobAgent activity log mirrors this process's stdout. Both decisions below put
@@ -780,9 +956,16 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
     let stallRetries = 0;
     /** Set after clicking to advance, so an unchanged page next round means the form refused. */
     let clickedWithoutProgress = false;
-    /** Consecutive steps spent waiting out a loading screen, bounded so a page that is
-     *  genuinely stuck — not just slow — still reaches the ordinary stall verdict. */
-    let loadingGrace = 4;
+
+    const persistHalt = async (stopReason: string) => {
+      await upsertApplication({
+        userId: input.userId,
+        jobId: input.job.id,
+        status: statusAfterApplyFailure(submittingWritten),
+        stopReason: submittingWritten ? "submit_aborted_before_click" : stopReason,
+      });
+      await finishTrace(artifactCtx, true);
+    };
 
     for (let step = 0; step < cfg.JOB_APPLY_MAX_STEPS; step += 1) {
       if (await isApplyPaused(input.userId)) {
@@ -805,14 +988,8 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
         await finishTrace(artifactCtx, true);
         return { stopReason: "time_limit", applicationId: application.id, artifacts: artifactCtx.paths };
       }
-      if (await getCommandStatus(input.commandId) === "canceled") {
-        await upsertApplication({
-          userId: input.userId,
-          jobId: input.job.id,
-          status: "needs_manual",
-          stopReason: "canceled",
-        });
-        await finishTrace(artifactCtx, true);
+      if (await applyShouldHalt(input.commandId)) {
+        await persistHalt("canceled");
         return { stopReason: "canceled", applicationId: application.id, artifacts: artifactCtx.paths };
       }
 
@@ -863,7 +1040,8 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
       fields = enhanced.fields;
       let llmCalls = enhanced.calls;
 
-      const fingerprint = fieldFingerprint(fields, frame.url());
+      let fingerprint = fieldFingerprint(fields, frame.url());
+      let justClearedTransientLoad = false;
 
       // The page is exactly as it was after we clicked to advance, which means the form
       // refused and said nothing about it. Indeed does this on its screening-questions
@@ -876,15 +1054,42 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
       if (
         clickedWithoutProgress &&
         fingerprint === previousFingerprint &&
-        loadingGrace > 0 &&
         (await looksLikeTransientLoad(frame))
       ) {
-        loadingGrace -= 1;
-        await sleep(1_500);
-        continue;
+        const wait = await waitOutTransientLoad(frame, {
+          shouldHalt: () => applyShouldHalt(input.commandId),
+        });
+        if (wait === "aborted") {
+          await persistHalt("canceled");
+          return { stopReason: "canceled", applicationId: application.id, artifacts: artifactCtx.paths };
+        }
+        // Same logical step: the wait used a time budget, not another JOB_APPLY_MAX_STEPS
+        // iteration. Re-scan so a review page that just finished loading still gets filled.
+        fields = await detectFields(frame);
+        if (mode !== "dry_run") {
+          fields = await expandComboboxOptions(frame, fields);
+        }
+        const enhancedAfterLoad =
+          (await withOllamaLock("applying", () =>
+            enhanceFieldsWithOllama(fields, matchSettings, {
+              maxCalls: 5,
+              minConfidence: 0.55,
+            }),
+          )) ?? { fields, calls: 0, available: false };
+        fields = enhancedAfterLoad.fields;
+        llmCalls = enhancedAfterLoad.calls;
+        fingerprint = fieldFingerprint(fields, frame.url());
+        justClearedTransientLoad = wait === "cleared";
       }
 
-      if (clickedWithoutProgress && fingerprint === previousFingerprint) {
+      if (
+        shouldTreatPageAsUnchangedStall({
+          clickedWithoutProgress,
+          fingerprint,
+          previousFingerprint,
+          justClearedTransientLoad,
+        })
+      ) {
         const unanswered = fields.filter(
           (field) => field.required && !String(field.currentValue ?? "").trim(),
         );
@@ -1253,6 +1458,7 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
           applyUrl: activePage.url(),
         });
         submittingWritten = true;
+        markInFlightSubmitting();
         // Crash simulation for tests — must leave submission_unknown if we never confirm.
         if (input.crashAfterSubmittingWrite) {
           await upsertApplication({
@@ -1268,18 +1474,9 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
 
         await screenshot(artifactCtx, "98-before-submit");
         await sleep(preSubmitDelayMs(random));
-        if (
-          (await isApplyPaused(input.userId)) ||
-          (await getCommandStatus(input.commandId)) === "canceled"
-        ) {
-          await upsertApplication({
-            userId: input.userId,
-            jobId: input.job.id,
-            status: "needs_manual",
-            stopReason: "submit_canceled_before_click",
-          });
+        if ((await isApplyPaused(input.userId)) || (await applyShouldHalt(input.commandId))) {
+          await persistHalt("submit_canceled_before_click");
           submittingWritten = false;
-          await finishTrace(artifactCtx, true);
           return { stopReason: "canceled", applicationId: application.id, artifacts: artifactCtx.paths };
         }
         await advance.locator.click({ timeout: 5000 });
@@ -1359,6 +1556,7 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
     await finishTrace(artifactCtx, true);
     return { stopReason: "error", applicationId: application.id, artifacts: artifactCtx.paths };
   } finally {
+    clearInFlightApply();
     artifacts.push(...artifactCtx.paths);
   }
 }

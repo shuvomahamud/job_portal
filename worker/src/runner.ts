@@ -8,6 +8,7 @@ import { verifyOllamaHealth } from "./ai/ollamaClient";
 import { acquireWorkerProcessLock } from "./processLock";
 import { queueImpliedWork } from "./selfDrive";
 import type { DashboardCommand } from "./types";
+import { abortWorker, persistAbortedApplication } from "./workerAbort";
 
 let stopping = false;
 
@@ -30,10 +31,21 @@ let inFlight: { id: string; type: string } | null = null;
  * order of the heartbeat window, not the next time anyone looked at the dashboard.
  *
  * Best-effort and short: the worker is already leaving on its own terms, so this must not
- * become a second thing to wait on.
+ * become a second thing to wait on. The abort flag is raised first, before any await, so
+ * the apply loop can refuse an irreversible submit click during this report. The in-flight
+ * application is moved off `draft`/`filling` (or to `submission_unknown` if submit had
+ * already been written) so a later retry is not blocked.
  */
 async function reportAbandonedCommandAndExit(reason: string): Promise<never> {
+  abortWorker();
   logger.warn(reason);
+  try {
+    await persistAbortedApplication();
+  } catch (error) {
+    logger.warn("Could not persist the abandoned application before exit", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
   const current = inFlight;
   if (current) {
     try {

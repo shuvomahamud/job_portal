@@ -68,9 +68,56 @@ export function normalizeJobUrl(source: BrowserDiscoverySource, rawHref: string,
     if (!sourceHosts[source].some((host) => url.hostname === host || url.hostname.endsWith(`.${host}`))) return null;
     if (!looksLikeJobUrl(source, url)) return null;
     stripTracking(url);
+    if (source === "indeed") return canonicalizeIndeedSourceUrl(url.toString()) ?? url.toString();
     return url.toString();
   } catch {
     return null;
+  }
+}
+
+/** Indeed's own job id. Same posting, many URLs. */
+export function indeedJobKey(rawUrl: string): string | null {
+  try {
+    const jk = new URL(rawUrl).searchParams.get("jk")?.trim();
+    return jk || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Collapse an Indeed posting to `https://{host}/viewjob?jk=…`.
+ *
+ * `/viewjob` and `/rc/clk` with the same `jk` are the same job. Tracking keys Indeed
+ * stamps on every listing card (`bb`, `xkcb`, `fccid`, `vjs`, `tk`, …) are not.
+ */
+export function canonicalizeIndeedSourceUrl(rawUrl: string): string | null {
+  try {
+    const url = new URL(rawUrl);
+    const host = url.hostname.toLowerCase();
+    if (host !== "indeed.com" && !host.endsWith(".indeed.com")) return null;
+    const jk = url.searchParams.get("jk")?.trim();
+    if (!jk) return null;
+    const canonicalHost = host === "indeed.com" ? "www.indeed.com" : host.replace(/^smartapply\./, "www.");
+    return `https://${canonicalHost}/viewjob?jk=${encodeURIComponent(jk)}`;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * True when this stored Indeed URL is a real posting (`/viewjob` or `/rc/clk`) that still
+ * carries tracking or the click-through path. `/addlLoc/redirect` is not a posting and
+ * must not be rewritten into a `viewjob` URL.
+ */
+export function isRewritableIndeedJobUrl(rawUrl: string): boolean {
+  try {
+    const path = new URL(rawUrl).pathname.toLowerCase();
+    if (!(path.includes("/viewjob") || path.includes("/rc/clk"))) return false;
+    const canonical = canonicalizeIndeedSourceUrl(rawUrl);
+    return Boolean(canonical) && rawUrl !== canonical;
+  } catch {
+    return false;
   }
 }
 
@@ -106,7 +153,9 @@ function looksLikeJobUrl(source: BrowserDiscoverySource, url: URL) {
 
 function stripTracking(url: URL) {
   for (const key of Array.from(url.searchParams.keys())) {
-    if (/^(utm_|trk|ref|from|src|ss|sp|vjk)/i.test(key)) url.searchParams.delete(key);
+    if (/^(utm_|trk|ref|from|src|ss|sp|vjk|bb|xkcb|fccid|vjs|tk|jkvt)/i.test(key)) {
+      url.searchParams.delete(key);
+    }
   }
   url.hash = "";
 }
@@ -123,7 +172,7 @@ export function buildDiscoveredJobRecords(
       company: metadata.company ?? `${source} browser discovery`,
       location: spec.location ?? null,
       source,
-      sourceUrl: url,
+      sourceUrl: (source === "indeed" ? canonicalizeIndeedSourceUrl(url) : null) ?? url,
       description:
         `Browser-assisted discovery found this ${source} job link for query "${spec.query}"` +
         `${spec.location ? ` in "${spec.location}"` : ""}. Open locally to verify details before applying.`,

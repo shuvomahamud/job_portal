@@ -6,6 +6,7 @@ import {
   buildDiscoveredJobRecords,
   extractJobUrlsFromHtml,
   humanDelayMs,
+  isRewritableIndeedJobUrl,
   normalizeJobUrl,
 } from "../src/search/browserDiscovery";
 
@@ -42,6 +43,17 @@ test("extractJobUrlsFromHtml keeps only matching individual job urls", () => {
   ]);
 });
 
+test("extractJobUrlsFromHtml collapses Indeed listings that only differ by tracking", () => {
+  const html = `
+    <a href="/viewjob?jk=bc303ec6d2c1bf6c&bb=one&vjs=3">A</a>
+    <a href="/rc/clk?jk=bc303ec6d2c1bf6c&xkcb=two&fccid=acme">B</a>
+  `;
+  assert.deepEqual(
+    extractJobUrlsFromHtml("indeed", html, "https://www.indeed.com/jobs?q=everforth", 10),
+    ["https://www.indeed.com/viewjob?jk=bc303ec6d2c1bf6c"],
+  );
+});
+
 test("normalizeJobUrl supports Indeed and Dice job patterns", () => {
   assert.equal(
     normalizeJobUrl("indeed", "/viewjob?jk=abc123&utm_source=x", "https://www.indeed.com/jobs?q=.net"),
@@ -53,7 +65,15 @@ test("normalizeJobUrl supports Indeed and Dice job patterns", () => {
       "/rc/clk?jk=abc123&amp;cmp=Acme+Corp&amp;ti=.NET+Developer&amp;vjk=tracking",
       "https://www.indeed.com/jobs?q=.net",
     ),
-    "https://www.indeed.com/rc/clk?jk=abc123&cmp=Acme+Corp&ti=.NET+Developer",
+    "https://www.indeed.com/viewjob?jk=abc123",
+  );
+  assert.equal(
+    normalizeJobUrl(
+      "indeed",
+      "/viewjob?jk=bc303ec6d2c1bf6c&bb=1&xkcb=2&fccid=3&vjs=3&tk=tok",
+      "https://www.indeed.com/jobs?q=.net",
+    ),
+    "https://www.indeed.com/viewjob?jk=bc303ec6d2c1bf6c",
   );
   // Live bug: this is Indeed's "more locations for this search" widget. It carries a jk
   // parameter exactly like a real job link, but leads to a search-results page — 43 of
@@ -70,6 +90,25 @@ test("normalizeJobUrl supports Indeed and Dice job patterns", () => {
   assert.equal(
     normalizeJobUrl("dice", "https://www.dice.com/job-detail/abc?utm_campaign=x", "https://www.dice.com/jobs"),
     "https://www.dice.com/job-detail/abc",
+  );
+});
+
+test("stored Indeed click-through URLs are rewritten; search-widget URLs are not", () => {
+  assert.equal(
+    isRewritableIndeedJobUrl(
+      "https://www.indeed.com/rc/clk?jk=bc303ec6d2c1bf6c&bb=1&xkcb=2&fccid=3&vjs=3",
+    ),
+    true,
+  );
+  assert.equal(
+    isRewritableIndeedJobUrl("https://www.indeed.com/viewjob?jk=bc303ec6d2c1bf6c"),
+    false,
+  );
+  assert.equal(
+    isRewritableIndeedJobUrl(
+      "https://www.indeed.com/addlLoc/redirect?tk=1jvus9nn&jk=b4d440465d091eb4&dest=%2Fjobs",
+    ),
+    false,
   );
 });
 
@@ -98,5 +137,5 @@ test("buildDiscoveredJobRecords uses Indeed URL metadata when available", () => 
 
   assert.equal(job.title, "Senior .NET Developer");
   assert.equal(job.company, "Acme Corp");
-  assert.equal(job.sourceUrl, "https://www.indeed.com/rc/clk?jk=abc123&cmp=Acme+Corp&ti=Senior+.NET+Developer");
+  assert.equal(job.sourceUrl, "https://www.indeed.com/viewjob?jk=abc123");
 });

@@ -23,6 +23,7 @@ export type LocatorLike = {
   click(options?: { timeout?: number; force?: boolean }): Promise<void>;
   check(options?: { timeout?: number; force?: boolean }): Promise<void>;
   fill(value: string, options?: { timeout?: number }): Promise<void>;
+  inputValue(options?: { timeout?: number }): Promise<string>;
   pressSequentially(value: string, options?: { delay?: number; timeout?: number }): Promise<void>;
   selectOption(
     values: { label?: string; value?: string; index?: number } | string | string[],

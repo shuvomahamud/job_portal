@@ -1,5 +1,5 @@
 import type { NormalizedJobInput } from "../types";
-import type { BrowserDiscoverySource } from "./browserDiscovery";
+import { canonicalizeIndeedSourceUrl, type BrowserDiscoverySource } from "./browserDiscovery";
 
 export type JobDetailFallback = {
   query: string;
@@ -64,7 +64,7 @@ export function extractIndeedMetadata(rawUrl: string): Partial<NormalizedJobInpu
     return cleanPartial({
       title: clean(url.searchParams.get("ti")),
       company: clean(url.searchParams.get("cmp")),
-      sourceUrl: url.toString(),
+      sourceUrl: canonicalizeIndeedSourceUrl(url.toString()) ?? url.toString(),
     });
   } catch {
     return {};

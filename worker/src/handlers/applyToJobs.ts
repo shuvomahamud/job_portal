@@ -4,7 +4,8 @@ import * as schema from "../../../src/db/schema";
 import { loadPlaywright, openBrowserSession } from "../browser/session";
 import type { PageLike } from "../browser/playwrightTypes";
 import { getConfig, sleep } from "../config";
-import { addCommandEvent, getCommandStatus, getWorkerDb } from "../db";
+import { addCommandEvent, getWorkerDb } from "../db";
+import { applyShouldHalt } from "../workerAbort";
 import { logger } from "../logger";
 import { requireCommandUserId } from "../requireCommandUserId";
 import type { HandlerContext, HandlerResult } from "../types";
@@ -121,7 +122,7 @@ export async function handleApplyToJobs(
 
     for (let index = 0; index < jobIds.length; index += 1) {
       const jobId = jobIds[index]!;
-      if (context.claimGuard.lost || (await getCommandStatus(context.command.id)) === "canceled") {
+      if (context.claimGuard.lost || (await applyShouldHalt(context.command.id))) {
         runStopReason = "canceled";
         break;
       }
