@@ -55,6 +55,18 @@ test("normalizeJobUrl supports Indeed and Dice job patterns", () => {
     ),
     "https://www.indeed.com/rc/clk?jk=abc123&cmp=Acme+Corp&ti=.NET+Developer",
   );
+  // Live bug: this is Indeed's "more locations for this search" widget. It carries a jk
+  // parameter exactly like a real job link, but leads to a search-results page — 43 of
+  // 164 stored Indeed jobs were this, unopenable, with a generic search-page title where
+  // a real one should have been.
+  assert.equal(
+    normalizeJobUrl(
+      "indeed",
+      "/addlLoc/redirect?tk=1jvus9nn&jk=b4d440465d091eb4&dest=%2Fjobs%3Fq%3DSenior",
+      "https://www.indeed.com/jobs?q=.net",
+    ),
+    null,
+  );
   assert.equal(
     normalizeJobUrl("dice", "https://www.dice.com/job-detail/abc?utm_campaign=x", "https://www.dice.com/jobs"),
     "https://www.dice.com/job-detail/abc",

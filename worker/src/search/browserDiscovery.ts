@@ -85,8 +85,21 @@ function decodeHtmlAttribute(value: string) {
 
 function looksLikeJobUrl(source: BrowserDiscoverySource, url: URL) {
   const path = url.pathname.toLowerCase();
-  const params = url.searchParams;
-  if (source === "indeed") return path.includes("/viewjob") || params.has("jk");
+  if (source === "indeed") {
+    // The bare `jk` check this replaced was too loose: `/addlLoc/redirect` — Indeed's
+    // "more locations for this search" widget — also stamps a jk parameter onto its
+    // links, so every one of them passed as if it were a job. It is not; it lands on a
+    // search-results page, not a posting, and the title/description extraction that then
+    // ran against that page picked up the search page's own <title> tag instead — the
+    // "Flexible Senior Software Engineer Jobs – Apply Today..." records this produced
+    // were not a separate bug, they were this one.
+    //
+    // Checked against the actual URL shapes this discovery has stored: /viewjob and
+    // /rc/clk both lead to a real posting — /rc/clk verified by hand, following one all
+    // the way through a live Indeed apply flow. /addlLoc/redirect does not, and nothing
+    // else has been observed, so nothing else is allowed on the strength of a guess.
+    return path.includes("/viewjob") || path.includes("/rc/clk");
+  }
   if (source === "dice") return path.includes("/job-detail") || path.includes("/jobs/detail");
   return false;
 }
