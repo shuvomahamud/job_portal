@@ -13,6 +13,49 @@ let stopping = false;
 
 /** How long a graceful stop may take before the process leaves anyway. */
 const STOP_DEADLINE_MS = 20_000;
+/** Budget for telling the dashboard about the command a forced exit is abandoning. */
+const ABANDON_REPORT_TIMEOUT_MS = 4_000;
+
+/** The command currently being processed, if any — read only by a forced exit. */
+let inFlight: { id: string; type: string } | null = null;
+
+/**
+ * Reports the command a forced exit is about to abandon, then leaves.
+ *
+ * A forced exit skips processCommand's own try/catch entirely — that is the whole point
+ * of forcing it — which otherwise left the command sitting claimed with nothing to say why
+ * it stopped there. Found live: a stop timed out mid-application, the process exited clean,
+ * and the command sat claimed with an application stuck mid-fill until someone noticed and
+ * fixed it by hand. Stale-claim recovery would have reached it eventually, but on the
+ * order of the heartbeat window, not the next time anyone looked at the dashboard.
+ *
+ * Best-effort and short: the worker is already leaving on its own terms, so this must not
+ * become a second thing to wait on.
+ */
+async function reportAbandonedCommandAndExit(reason: string): Promise<never> {
+  logger.warn(reason);
+  const current = inFlight;
+  if (current) {
+    try {
+      await Promise.race([
+        failCommand(current.id, "Worker was stopped before this command finished.", {
+          failedAt: new Date().toISOString(),
+        }),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error("report timeout")), ABANDON_REPORT_TIMEOUT_MS),
+        ),
+      ]);
+      logger.warn("Reported the abandoned command to the dashboard", { commandId: current.id });
+    } catch (error) {
+      // Falls back to stale-claim recovery, on the heartbeat window rather than now.
+      logger.warn("Could not report the abandoned command; leaving it for stale-claim recovery", {
+        commandId: current.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+  process.exit(0);
+}
 
 /**
  * Setting a flag was not enough to stop this process.
@@ -28,14 +71,15 @@ const STOP_DEADLINE_MS = 20_000;
  */
 function requestStop(signal: string) {
   if (stopping) {
-    logger.warn(`Received ${signal} again; exiting now.`);
-    process.exit(0);
+    void reportAbandonedCommandAndExit(`Received ${signal} again; exiting now.`);
+    return;
   }
   stopping = true;
   logger.warn(`Received ${signal}; stopping after current command.`);
   const deadline = setTimeout(() => {
-    logger.warn("Graceful stop timed out; exiting.", { afterMs: STOP_DEADLINE_MS });
-    process.exit(0);
+    void reportAbandonedCommandAndExit(
+      `Graceful stop timed out after ${STOP_DEADLINE_MS}ms; exiting.`,
+    );
   }, STOP_DEADLINE_MS);
   // Never hold the process open on the timer's account.
   deadline.unref();
@@ -56,6 +100,7 @@ async function wasCanceled(commandId: string): Promise<boolean> {
 async function processCommand(command: DashboardCommand) {
   logger.info("Processing command", { commandId: command.id, type: command.type });
   const cfg = getConfig();
+  inFlight = { id: command.id, type: command.type };
   try {
     await addCommandEvent(command.id, "worker_started", "Phase 2 worker started processing command.", {
       type: command.type,
@@ -89,6 +134,11 @@ async function processCommand(command: DashboardCommand) {
         error: failError instanceof Error ? failError.message : "Unknown fail-report error",
       });
     }
+  } finally {
+    // Cleared once this command is genuinely no longer in flight, by any exit path, so a
+    // stop signal arriving after it finished never tries to report a command that already
+    // reported for itself.
+    inFlight = null;
   }
 }
 
