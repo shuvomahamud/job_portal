@@ -15,6 +15,26 @@ import { resolveNotifyChannel } from "../notify";
 import { isApplyPaused } from "../apply/applyEligibility";
 import { MAX_APPLICATIONS_PER_RUN } from "../../../src/lib/runLimits";
 
+/**
+ * The message a completed run reports.
+ *
+ * With one job per command — every caller now sends exactly one — that job's own
+ * stopReason is the whole story, and is far more useful than a batch label that was never
+ * really about it. The batch-summary form is kept for the case of more than one, which
+ * nothing currently sends but the payload schema still permits.
+ */
+export function describeApplyRunOutcome(
+  results: Array<{ stopReason: ApplyStopReason }>,
+  runStopReason: string,
+  runLimit: number,
+  summary: { submitted: number; needsAnswers: number; blocked: number },
+): string {
+  if (results.length === 1) {
+    return `Apply finished for 1 job: ${results[0]!.stopReason}.`;
+  }
+  return `Apply run stopped (${runStopReason}) after ${results.length}/${runLimit} job(s): submitted=${summary.submitted} needs_answers=${summary.needsAnswers} blocked=${summary.blocked}.`;
+}
+
 const payloadSchema = z
   .object({
     jobIds: z.array(z.string().uuid()).min(1).max(MAX_APPLICATIONS_PER_RUN),
@@ -190,9 +210,15 @@ export async function handleApplyToJobs(
       }
     }
 
-    if (runStopReason === "eligible_jobs_exhausted" && results.length >= runLimit) {
-      runStopReason = "run_limit_reached";
-    }
+    // No "run_limit_reached" synthesis here any more. It used to fire whenever the loop
+    // completed normally and results.length reached runLimit — which is every ordinary
+    // completion once each command carries exactly one job, since a one-element list is
+    // never short of a limit of one. A stall, a failed upload, a genuine submission: all
+    // of them got the same "run_limit_reached" label, which is not what happened and gave
+    // no one anything to act on. eligible_jobs_exhausted — the value this started at —
+    // already correctly describes "the loop finished the jobs it was given without being
+    // interrupted"; that is true whether or not more eligible postings exist elsewhere,
+    // and this command has no way to know that from in here regardless.
 
     const channel = resolveNotifyChannel(cfg);
     await channel.notifyRunSummary({
@@ -212,7 +238,7 @@ export async function handleApplyToJobs(
         summary,
         results,
       },
-      message: `Apply run stopped (${runStopReason}) after ${results.length}/${runLimit} job(s): submitted=${summary.submitted} needs_answers=${summary.needsAnswers} blocked=${summary.blocked}.`,
+      message: describeApplyRunOutcome(results, runStopReason, runLimit, summary),
     };
   } finally {
     // A CAPTCHA lives in the page that hit it. Closing that page destroys the only copy

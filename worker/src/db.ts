@@ -982,7 +982,15 @@ export async function queueNextApplicationIfIdle(input: {
       type: "apply_to_jobs",
       source: "worker",
       requestedBy: input.requestedBy,
-      payloadJson: { jobIds: [input.jobId], mode: input.mode, maxJobs: 1 },
+      // No maxJobs. Setting it to 1 to match the single job in jobIds used to make
+      // apply_to_jobs's own "did we hit the limit" check fire on every ordinary
+      // completion — jobIds.length >= maxJobs is true whenever the job list is not
+      // padded past the limit, which a one-element list never is — so every real
+      // outcome, a stall included, was reported as "run_limit_reached". Leaving it
+      // unset falls back to the configured per-run default, the same as the manual
+      // "Apply now" path already does, and that gap between the two never mattered
+      // until this stopped being a batch.
+      payloadJson: { jobIds: [input.jobId], mode: input.mode },
       priority: "normal",
     })
     .returning();
