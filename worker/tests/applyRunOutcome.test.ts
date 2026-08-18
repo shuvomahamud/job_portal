@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { describeApplyRunOutcome } from "../src/handlers/applyToJobs";
+import { describeApplyRunOutcome, shouldLeaveApplyBrowserOpen } from "../src/handlers/applyToJobs";
 
 const summary = { submitted: 0, needsAnswers: 0, blocked: 0 };
 
@@ -34,4 +34,27 @@ test("a genuine multi-job batch still gets the summary form", () => {
   );
   assert.match(message, /run_limit_reached/);
   assert.match(message, /2\/2 job/);
+});
+
+test("needs_answers, canceled, and fill crashes all leave the apply tab open", () => {
+  assert.equal(
+    shouldLeaveApplyBrowserOpen([{ stopReason: "needs_answers" }], "eligible_jobs_exhausted"),
+    true,
+  );
+  assert.equal(
+    shouldLeaveApplyBrowserOpen([{ stopReason: "canceled" }], "canceled"),
+    true,
+  );
+  assert.equal(
+    shouldLeaveApplyBrowserOpen([{ stopReason: "error" }], "eligible_jobs_exhausted"),
+    true,
+  );
+  assert.equal(
+    shouldLeaveApplyBrowserOpen([{ stopReason: "already_applied" }], "eligible_jobs_exhausted"),
+    true,
+  );
+  assert.equal(
+    shouldLeaveApplyBrowserOpen([{ stopReason: "submitted" }], "eligible_jobs_exhausted"),
+    false,
+  );
 });

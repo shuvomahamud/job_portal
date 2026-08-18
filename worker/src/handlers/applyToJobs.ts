@@ -24,6 +24,25 @@ import { MAX_APPLICATIONS_PER_RUN } from "../../../src/lib/runLimits";
  * really about it. The batch-summary form is kept for the case of more than one, which
  * nothing currently sends but the payload schema still permits.
  */
+export function shouldLeaveApplyBrowserOpen(
+  results: Array<{ stopReason: ApplyStopReason }>,
+  runStopReason: string,
+): boolean {
+  if (runStopReason === "blocked") return true;
+  return results.some((result) =>
+    [
+      "blocked",
+      "stalled",
+      "needs_manual",
+      "needs_answers",
+      "canceled",
+      "time_limit",
+      "error",
+      "already_applied",
+    ].includes(result.stopReason),
+  );
+}
+
 export function describeApplyRunOutcome(
   results: Array<{ stopReason: ApplyStopReason }>,
   runStopReason: string,
@@ -103,6 +122,8 @@ export async function handleApplyToJobs(
     dryRun: 0,
     needsAnswers: 0,
     blocked: 0,
+    stalled: 0,
+    needsManual: 0,
     failed: 0,
     skipped: 0,
   };
@@ -173,14 +194,25 @@ export async function handleApplyToJobs(
           summary.blocked += 1;
           runStopReason = "blocked";
           break;
+        } else if (result.stopReason === "stalled") {
+          summary.stalled += 1;
+        } else if (result.stopReason === "needs_manual") {
+          summary.needsManual += 1;
         } else if (
           result.stopReason === "already_applied" ||
           result.stopReason === "external_ats" ||
-          result.stopReason === "needs_manual" ||
           result.stopReason === "time_limit"
         ) {
           summary.skipped += 1;
         } else summary.failed += 1;
+
+        if (result.stopReason === "stalled" || result.stopReason === "needs_manual") {
+          await resolveNotifyChannel(cfg).notifyStuck({
+            jobTitle: job.title,
+            company: job.company,
+            kind: result.stopReason,
+          });
+        }
 
         await addCommandEvent(
           context.command.id,
@@ -226,6 +258,8 @@ export async function handleApplyToJobs(
       applied: summary.submitted,
       needsAnswers: summary.needsAnswers,
       blocked: summary.blocked,
+      stalled: summary.stalled,
+      needsManual: summary.needsManual,
       failed: summary.failed,
     });
 
@@ -251,19 +285,22 @@ export async function handleApplyToJobs(
     // a person could finish in seconds — and takes with it the only evidence of what
     // actually went wrong.
     const stalled = results.some((result) => result.stopReason === "stalled");
-    const leaveOpenForHuman = runStopReason === "blocked" || stalled;
+    const needsManual = results.some((result) => result.stopReason === "needs_manual");
+    const needsAnswers = results.some((result) => result.stopReason === "needs_answers");
+    const leaveOpenForHuman = shouldLeaveApplyBrowserOpen(results, runStopReason);
     if (leaveOpenForHuman) {
       logger.info("Leaving the apply browser open for a human", {
         commandId: context.command.id,
         reason: runStopReason,
+        needsAnswers,
       });
       await addCommandEvent(
         context.command.id,
         "apply_browser_left_open",
-        stalled
+        stalled || needsManual || needsAnswers
           ? "The form could not be advanced automatically. The tab is still open on it, filled in as far as the agent got."
           : "Stopped on a challenge that needs a person. The browser tab is still open on it — solve it there, then resume.",
-        { runStopReason, stalled },
+        { runStopReason, stalled, needsManual, needsAnswers },
       );
     } else {
       if (page) {

@@ -184,6 +184,11 @@ export async function runWorkerLoop() {
     maxConcurrency: cfg.WORKER_MAX_CONCURRENCY,
     commandTypes,
   });
+  if (!cfg.JOB_APPLY_PUSH_ENABLED || !cfg.NTFY_TOPIC) {
+    logger.warn(
+      "Phone notifications are off. JobAgent Settings needs Notify my phone on and the same ntfy topic the phone app already uses.",
+    );
+  }
 
   let idlePolls = 0;
   let nextRecoveryAt = 0;

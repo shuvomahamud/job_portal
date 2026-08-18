@@ -14,11 +14,14 @@ import {
   formatQuestionsTitle,
   formatBrowserBlockedTitle,
   formatBrowserBlockedBody,
+  formatStuckTitle,
+  formatStuckBody,
   type NotificationChannel,
   type NotifyAnswerAcceptedInput,
   type NotifyQuestionsInput,
   type NotifyRunSummaryInput,
   type NotifyBrowserBlockedInput,
+  type NotifyStuckInput,
 } from "./channel";
 import { logger } from "../logger";
 
@@ -78,7 +81,7 @@ export function createPushChannel(options: PushChannelOptions): NotificationChan
       await publish(
         formatQuestionsTitle(input),
         formatQuestionsBody(input),
-        input.questions.some((question) => question.required) ? 3 : 2,
+        input.questions.some((question) => question.required) ? 5 : 3,
         ["question"],
       );
       return {};
@@ -92,8 +95,11 @@ export function createPushChannel(options: PushChannelOptions): NotificationChan
       const parts = [`${input.applied} applied`];
       if (input.needsAnswers) parts.push(`${input.needsAnswers} need answers`);
       if (input.blocked) parts.push(`${input.blocked} blocked`);
+      if (input.stalled) parts.push(`${input.stalled} stalled`);
+      if (input.needsManual) parts.push(`${input.needsManual} need you`);
       if (input.failed) parts.push(`${input.failed} failed`);
-      await publish("Apply run finished", parts.join(" · "), 2, ["checkered_flag"]);
+      const needsYou = Boolean(input.needsAnswers || input.blocked || input.stalled || input.needsManual);
+      await publish("Apply run finished", parts.join(" · "), needsYou ? 3 : 2, ["checkered_flag"]);
     },
     async notifyBrowserBlocked(input: NotifyBrowserBlockedInput) {
       // The one that has to cut through. Until this is dealt with, the run is stopped and
@@ -104,6 +110,9 @@ export function createPushChannel(options: PushChannelOptions): NotificationChan
         5,
         ["rotating_light"],
       );
+    },
+    async notifyStuck(input: NotifyStuckInput) {
+      await publish(formatStuckTitle(input.kind), formatStuckBody(input), 5, ["rotating_light"]);
     },
   };
 }

@@ -30,7 +30,7 @@ export async function prepareManagedCdpBrowser(
   const targetsBefore = await listTargets(endpoint, fetchImpl, requestTimeoutMs);
   const freshTarget = await createBlankTarget(endpoint, fetchImpl, requestTimeoutMs);
   const targetsToClose = targetsBefore.filter(
-    (target) => target.type === "page" && target.id !== freshTarget.id,
+    (target) => isDisposableManagedPage(target) && target.id !== freshTarget.id,
   );
 
   await Promise.all(
@@ -43,7 +43,7 @@ export async function prepareManagedCdpBrowser(
     ),
   );
 
-  await waitForManagedTargetOnly(
+  await waitForFreshTarget(
     endpoint,
     freshTarget.id,
     fetchImpl,
@@ -93,7 +93,7 @@ async function createBlankTarget(
   return body;
 }
 
-async function waitForManagedTargetOnly(
+async function waitForFreshTarget(
   endpoint: URL,
   freshTargetId: string,
   fetchImpl: FetchLike,
@@ -102,13 +102,27 @@ async function waitForManagedTargetOnly(
 ) {
   const deadlineAt = Date.now() + settleTimeoutMs;
   while (true) {
-    const pageTargets = (await listTargets(endpoint, fetchImpl, requestTimeoutMs))
-      .filter((target) => target.type === "page");
-    if (pageTargets.length === 1 && pageTargets[0]?.id === freshTargetId) return;
+    const pageTargets = (await listTargets(endpoint, fetchImpl, requestTimeoutMs)).filter(
+      (target) => target.type === "page",
+    );
+    if (pageTargets.some((target) => target.id === freshTargetId)) return;
     if (Date.now() >= deadlineAt) {
-      throw new Error("Chrome CDP cleanup timed out while waiting for stale pages to close.");
+      throw new Error("Chrome CDP cleanup timed out while waiting for a fresh page.");
     }
     await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+}
+
+/** Blank/new-tab pages only. An Indeed apply left open for Resume must not be closed. */
+export function isDisposableManagedPage(target: CdpTarget): boolean {
+  if (target.type !== "page") return false;
+  const url = (target.url ?? "").trim();
+  if (!url || url === "about:blank") return true;
+  try {
+    const protocol = new URL(url).protocol;
+    return protocol === "chrome:" || protocol === "chrome-untrusted:" || protocol === "devtools:";
+  } catch {
+    return false;
   }
 }
 

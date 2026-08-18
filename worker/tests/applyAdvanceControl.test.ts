@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { adapterFor, looksLikeAlreadyApplied } from "../src/apply/applySteps";
+import { adapterFor, looksLikeAlreadyApplied, looksLikeSubmitted } from "../src/apply/applySteps";
 import type { FrameLike, PageLike } from "../src/browser/playwrightTypes";
 
 function fakeFrame(
@@ -140,10 +140,9 @@ test("Dice wizard Next is the advance control", async () => {
   assert.equal(await advance.locator.innerText(), "Next");
 });
 
-test("Dice's already-applied confirmation is recognised", () => {
-  assert.equal(
-    looksLikeAlreadyApplied("You've already applied to this job! We have your application on file."),
-    true,
-  );
-  assert.equal(looksLikeAlreadyApplied("Review your application"), false);
+test("a thanks-for-applying page is recognised as already finished", () => {
+  assert.equal(looksLikeSubmitted("Application submitted. Thanks for applying!"), true);
+  assert.equal(looksLikeAlreadyApplied("You've already applied to this job! We have your application on file."), true);
+  assert.equal(looksLikeSubmitted("Review your application"), false);
+  assert.equal(looksLikeAlreadyApplied("Easy Apply Full stack Engineer"), false);
 });

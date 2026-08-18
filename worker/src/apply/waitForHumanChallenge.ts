@@ -1,18 +1,49 @@
 import type { BrowserBlocker, BrowserBlockerKind } from "../browser/blockerDetection";
-import { challengeNeedsHuman } from "../browser/blockerDetection";
 
 export type HumanChallengeWait = "cleared" | "aborted";
+export type PendingAnswersWait = "resumed" | "aborted";
 
 /**
- * Stops clicking, asks for help, and stays on the current page until the user resumes.
+ * Holds the open apply tab until the user hits Resume.
+ *
+ * Filling the Indeed page, answering in the dashboard, or the pending-question rows
+ * disappearing is not a continue signal. The last live run kept the Resume banner up
+ * while the worker unpaused on its own and started filling — then crashed.
+ */
+export async function waitForPendingAnswers(input: {
+  hasOpenQuestions?: () => Promise<boolean>;
+  isPaused: () => Promise<boolean>;
+  setPaused: (paused: boolean) => Promise<void>;
+  shouldHalt?: () => Promise<boolean>;
+  sleep?: (ms: number) => Promise<void>;
+  pollMs?: number;
+}): Promise<PendingAnswersWait> {
+  const sleepFn = input.sleep ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
+  const pollMs = input.pollMs ?? 2_000;
+  await input.setPaused(true);
+
+  while (true) {
+    if (input.shouldHalt && (await input.shouldHalt())) return "aborted";
+    if (!(await input.isPaused())) return "resumed";
+    await sleepFn(pollMs);
+  }
+}
+
+/**
+ * Stops clicking, asks for help, and stays on the current page until Resume.
  *
  * Indeed's "I'm not a robot" checkbox appears after Submit. Exiting the apply as `blocked`
  * abandons that page; the next run has to start over. Waiting in place keeps the form,
  * including a submit that is already in flight.
  *
- * Resume is explicit: disappearing the checkbox is not enough. The user clicks Resume
- * automated apply (or marks the alert handled). If they resume while the challenge is
- * still up, this pauses again.
+ * The only continue signal is Resume (applyPaused becoming false). Signing in, solving
+ * the CAPTCHA, clearing the alert, or the widget disappearing must not unpause. After
+ * Resume this waiter returns even if the challenge is still visible — later steps can
+ * re-detect; this one must not immediately pause again.
+ *
+ * Indeed also shows an image grid ("Select all images with cars") on the last review
+ * page, inside a reCAPTCHA iframe the page body never exposes. Detection must see that
+ * widget; this waiter then holds the tab instead of burning the remaining steps.
  */
 export async function waitForHumanChallenge(input: {
   initial: BrowserBlocker;
@@ -29,7 +60,6 @@ export async function waitForHumanChallenge(input: {
 }): Promise<HumanChallengeWait> {
   const sleepFn = input.sleep ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
   const pollMs = input.pollMs ?? 2_000;
-  const solvable = input.isSolvable ?? challengeNeedsHuman;
   let askedThisPause = false;
 
   const enterPause = async (blocker: BrowserBlocker) => {
@@ -43,24 +73,10 @@ export async function waitForHumanChallenge(input: {
 
   while (true) {
     if (input.shouldHalt && (await input.shouldHalt())) return "aborted";
-
-    const paused = await input.isPaused();
-    const alertOpen = input.alertStillOpen ? await input.alertStillOpen() : true;
-    if (paused && alertOpen) {
-      await sleepFn(pollMs);
-      continue;
+    if (!(await input.isPaused())) {
+      await input.onCleared?.();
+      return "cleared";
     }
-
-    askedThisPause = false;
-    if (paused) await input.setPaused(false);
-
-    const still = await input.detect();
-    if (still && solvable(still.kind)) {
-      await enterPause(still);
-      continue;
-    }
-
-    await input.onCleared?.();
-    return "cleared";
+    await sleepFn(pollMs);
   }
 }

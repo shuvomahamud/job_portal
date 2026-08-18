@@ -72,6 +72,8 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
   <key>CFBundleExecutable</key><string>JobAgent</string>
   <key>CFBundleIconFile</key><string>JobAgent</string>
   <key>CFBundlePackageType</key><string>APPL</string>
+  <key>NSUserNotificationsUsageDescription</key>
+  <string>JobAgent alerts you when an application needs a CAPTCHA, a login, or an answer.</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
 </dict>
 </plist>

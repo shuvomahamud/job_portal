@@ -10,5 +10,6 @@ export function createDashboardChannel(): NotificationChannel {
     async notifyAnswerAccepted() {},
     async notifyRunSummary() {},
     async notifyBrowserBlocked() {},
+    async notifyStuck() {},
   };
 }

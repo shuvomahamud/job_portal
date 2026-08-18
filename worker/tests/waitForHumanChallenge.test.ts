@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { waitForHumanChallenge } from "../src/apply/waitForHumanChallenge";
+import { waitForHumanChallenge, waitForPendingAnswers } from "../src/apply/waitForHumanChallenge";
 import type { BrowserBlocker } from "../src/browser/blockerDetection";
 
 const captcha = (evidence = "visible"): BrowserBlocker => ({
@@ -45,15 +45,10 @@ test("pauses until Resume, even if the checkbox disappears first", async () => {
   assert.equal(paused, false);
 });
 
-test("asks again if Resume is clicked while the challenge is still up", async () => {
+test("Resume continues even if the challenge is still up", async () => {
   let paused = false;
   let challenge: BrowserBlocker | null = captcha();
   const asks: string[] = [];
-  const ticks: Array<"early-resume" | "gone" | "resume"> = [
-    "early-resume",
-    "gone",
-    "resume",
-  ];
 
   const result = await waitForHumanChallenge({
     initial: captcha(),
@@ -66,24 +61,22 @@ test("asks again if Resume is clicked while the challenge is still up", async ()
       asks.push(blocker.kind);
     },
     sleep: async () => {
-      const tick = ticks.shift();
-      if (tick === "early-resume") paused = false;
-      if (tick === "gone") challenge = null;
-      if (tick === "resume") paused = false;
+      paused = false;
     },
     pollMs: 1,
   });
 
   assert.equal(result, "cleared");
-  assert.equal(asks.length, 2, "an early resume must ask for help again");
+  assert.equal(asks.length, 1, "Resume must not immediately re-ask while the widget is still visible");
+  assert.equal(challenge?.kind, "captcha");
 });
 
-test("treats clearing the alert as resume, then continues once the challenge is gone", async () => {
+test("clearing the alert without Resume keeps waiting", async () => {
   let paused = false;
   let alertOpen = true;
   let challenge: BrowserBlocker | null = captcha();
   let cleared = 0;
-  const ticks: Array<"handled" | "gone"> = ["handled", "gone"];
+  const ticks: Array<"handled" | "poll" | "resume"> = ["handled", "poll", "resume"];
 
   const result = await waitForHumanChallenge({
     initial: captcha(),
@@ -103,13 +96,14 @@ test("treats clearing the alert as resume, then continues once the challenge is 
         alertOpen = false;
         challenge = null;
       }
+      if (tick === "resume") paused = false;
     },
     pollMs: 1,
   });
 
   assert.equal(result, "cleared");
-  assert.equal(paused, false, "I've handled it must unpause so the apply loop does not abort");
   assert.equal(cleared, 1);
+  assert.deepEqual(ticks, []);
 });
 
 test("aborts when the command is halted", async () => {
@@ -127,4 +121,42 @@ test("aborts when the command is halted", async () => {
     pollMs: 1,
   });
   assert.equal(result, "aborted");
+});
+
+test("question wait does not continue just because the page was answered", async () => {
+  let paused = false;
+  let open = true;
+  const ticks: Array<"answered" | "poll" | "resume"> = ["answered", "poll", "resume"];
+  const result = await waitForPendingAnswers({
+    hasOpenQuestions: async () => open,
+    isPaused: async () => paused,
+    setPaused: async (value) => {
+      paused = value;
+    },
+    sleep: async () => {
+      const tick = ticks.shift();
+      if (tick === "answered") open = false;
+      if (tick === "resume") paused = false;
+    },
+    pollMs: 1,
+  });
+  assert.equal(result, "resumed");
+  assert.equal(open, false, "questions can be gone while we still wait for Resume");
+  assert.deepEqual(ticks, []);
+});
+
+test("question wait treats Resume as continue even if questions remain", async () => {
+  let paused = false;
+  const result = await waitForPendingAnswers({
+    hasOpenQuestions: async () => true,
+    isPaused: async () => paused,
+    setPaused: async (value) => {
+      paused = value;
+    },
+    sleep: async () => {
+      paused = false;
+    },
+    pollMs: 1,
+  });
+  assert.equal(result, "resumed");
 });

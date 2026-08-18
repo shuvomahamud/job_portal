@@ -91,13 +91,9 @@ enum Notifier {
     /// Must match DESKTOP_NOTIFY_PREFIX in worker/src/notify/desktopChannel.ts.
     static let prefix = "@@JOBAGENT_NOTIFY@@"
 
-    private static var authorized = false
-
     static func requestPermission() {
-        UNUserNotificationCenter.current()
-            .requestAuthorization(options: [.alert, .sound]) { granted, _ in
-                authorized = granted
-            }
+        let center = UNUserNotificationCenter.current()
+        center.requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }
     }
 
     static func post(title: String, body: String) {
@@ -105,6 +101,7 @@ enum Notifier {
         content.title = title
         content.body = body
         content.sound = .default
+        content.interruptionLevel = .timeSensitive
 
         let request = UNNotificationRequest(
             identifier: UUID().uuidString,
@@ -112,6 +109,19 @@ enum Notifier {
             trigger: nil
         )
         UNUserNotificationCenter.current().add(request)
+    }
+
+    static func needsModal(_ title: String) -> Bool {
+        let text = title.lowercased()
+        if text.contains("apply run finished") { return false }
+        if text.contains("answer accepted") { return false }
+        return text.contains("captcha")
+            || text.contains("needs you")
+            || text.contains("stalled")
+            || text.contains("login")
+            || text.contains("needs an answer")
+            || text.contains("needs ")
+            || text.contains("blocked")
     }
 }
 
@@ -134,6 +144,7 @@ enum ScriptRunner {
             var env = ProcessInfo.processInfo.environment
             for (key, value) in ConfigStore.shared.values { env[key] = value }
             env["PATH"] = "\(URL(fileURLWithPath: nodeBin).deletingLastPathComponent().path):/usr/local/bin:/usr/bin:/bin"
+            env["WORKER_ENV_FILE"] = ConfigStore.fileURL.path
             task.environment = env
 
             let out = Pipe()
@@ -228,6 +239,80 @@ enum ResumeService {
                         sizeBytes: item["sizeBytes"] as? Int
                     )
                 }))
+            }
+        }
+    }
+}
+
+struct HumanChallenge {
+    let paused: Bool
+    let kind: String
+    let site: String
+    let message: String
+
+    var title: String {
+        let board = site.isEmpty ? "A job site" : site.capitalized
+        if kind == "captcha" { return "Paused — \(board) needs a CAPTCHA solved" }
+        if kind == "login_required" { return "Paused — log in to \(board)" }
+        if kind == "access_denied" { return "Paused — \(board) blocked the worker" }
+        if kind == "user_paused" || (paused && kind.isEmpty) {
+            return "Paused — finish this in Chrome if you want"
+        }
+        return paused ? "Paused — the agent needs you" : "The agent needs you"
+    }
+
+    var body: String {
+        let next = "Solve it in JobAgent Chrome, then click Resume automated apply."
+        if kind == "user_paused" || (paused && message.isEmpty) {
+            return "The agent stopped clicking. Complete the application in JobAgent Chrome if you want, then click Resume when you want it to continue."
+        }
+        if message.isEmpty { return next }
+        return "\(message)\n\n\(next)"
+    }
+}
+
+enum ChallengeService {
+    static func status(completion: @escaping (Result<HumanChallenge?, ServiceError>) -> Void) {
+        ScriptRunner.run("worker/scripts/humanChallenge.ts", ["status"]) { result in
+            switch result {
+            case .failure(let error):
+                completion(.failure(error))
+            case .success(let json):
+                let paused = json["paused"] as? Bool ?? false
+                let alerts = json["alerts"] as? [[String: Any]] ?? []
+                guard paused || !alerts.isEmpty else {
+                    completion(.success(nil))
+                    return
+                }
+                let alert = alerts.first ?? [:]
+                completion(.success(HumanChallenge(
+                    paused: paused,
+                    kind: alert["kind"] as? String ?? (paused ? "user_paused" : ""),
+                    site: alert["site"] as? String ?? "",
+                    message: alert["message"] as? String ?? ""
+                )))
+            }
+        }
+    }
+
+    static func pause(completion: @escaping (Result<Void, ServiceError>) -> Void) {
+        ScriptRunner.run("worker/scripts/humanChallenge.ts", ["pause"]) { result in
+            switch result {
+            case .failure(let error):
+                completion(.failure(error))
+            case .success:
+                completion(.success(()))
+            }
+        }
+    }
+
+    static func resume(completion: @escaping (Result<Void, ServiceError>) -> Void) {
+        ScriptRunner.run("worker/scripts/humanChallenge.ts", ["resume"]) { result in
+            switch result {
+            case .failure(let error):
+                completion(.failure(error))
+            case .success:
+                completion(.success(()))
             }
         }
     }
@@ -423,6 +508,9 @@ final class ConfigStore {
         if get(Key.browserChannel) == "bundled" {
             result.append("Browser engine is bundled Chromium — Google Chrome passes bot checks more reliably")
         }
+        if bool(Key.applyEnabled) && (!bool(Key.pushEnabled) || get(Key.ntfyTopic).count < 8) {
+            result.append("Phone alerts are off — turn on Notify my phone and paste the ntfy topic already in your ntfy app")
+        }
         return result
     }
 
@@ -475,6 +563,8 @@ final class WorkerController {
     private(set) var state: WorkerState = .stopped
 
     var onStateChange: ((WorkerState) -> Void)?
+    var onAttention: ((String, String) -> Void)?
+    private var outputBuffer = ""
 
     let logURL: URL = {
         let dir = FileManager.default.homeDirectoryForCurrentUser
@@ -806,30 +896,40 @@ final class WorkerController {
     ///
     /// The worker emits a tagged JSON line when it wants the user's attention. Those become
     /// native notifications and are kept out of the log; everything else is logged as-is.
+    /// Pipe reads can split a line, so incomplete data stays in `outputBuffer` until the
+    /// newline arrives — otherwise a CAPTCHA alert can vanish because its JSON was torn.
     private func consumeWorkerOutput(_ data: Data) {
-        guard let text = String(data: data, encoding: .utf8) else {
+        guard let chunk = String(data: data, encoding: .utf8) else {
             logHandle?.write(data)
             return
         }
-
+        outputBuffer += chunk
         var passthrough = ""
-        for line in text.components(separatedBy: "\n") {
-            guard let range = line.range(of: Notifier.prefix) else {
-                if !line.isEmpty { passthrough += line + "\n" }
-                continue
-            }
-            let payload = String(line[range.upperBound...])
-            if let json = try? JSONSerialization.jsonObject(with: Data(payload.utf8)) as? [String: Any],
-               let title = json["title"] as? String,
-               let body = json["body"] as? String {
-                Notifier.post(title: title, body: body)
-                // Keep a plain record in the log so the activity view still shows it.
-                passthrough += "[notification] \(title): \(body.replacingOccurrences(of: "\n", with: " — "))\n"
-            }
+        while let newline = outputBuffer.range(of: "\n") {
+            let line = String(outputBuffer[..<newline.lowerBound])
+            outputBuffer = String(outputBuffer[newline.upperBound...])
+            passthrough += handleWorkerLine(line)
         }
         if !passthrough.isEmpty, let out = passthrough.data(using: .utf8) {
             logHandle?.write(out)
         }
+    }
+
+    private func handleWorkerLine(_ line: String) -> String {
+        guard let range = line.range(of: Notifier.prefix) else {
+            return line.isEmpty ? "" : line + "\n"
+        }
+        let payload = String(line[range.upperBound...])
+        if let json = try? JSONSerialization.jsonObject(with: Data(payload.utf8)) as? [String: Any],
+           let title = json["title"] as? String,
+           let body = json["body"] as? String {
+            Notifier.post(title: title, body: body)
+            DispatchQueue.main.async { [weak self] in
+                self?.onAttention?(title, body)
+            }
+            return "[notification] \(title): \(body.replacingOccurrences(of: "\n", with: " — "))\n"
+        }
+        return line + "\n"
     }
 
     /// Last chunk of the log, for the live view on the Control tab.
@@ -905,10 +1005,16 @@ final class MainWindowController: NSWindowController, NSTextFieldDelegate, NSTex
     private let statusDetail = NSTextField(labelWithString: "")
     private let startButton = NSButton(title: "Start Agent", target: nil, action: nil)
     private let stopButton = NSButton(title: "Stop Agent", target: nil, action: nil)
+    private let pauseButton = NSButton(title: "Pause apply", target: nil, action: nil)
+    private let challengeBox = NSBox()
+    private let challengeTitle = NSTextField(labelWithString: "")
+    private let challengeBody = NSTextField(wrappingLabelWithString: "")
+    private let resumeButton = NSButton(title: "Resume automated apply", target: nil, action: nil)
     private let checklistStack = NSStackView()
     private let runCycleButton = NSButton(title: "Run Cycle Now", target: nil, action: nil)
     private let logView = NSTextView()
     private var logTimer: Timer?
+    private var challengeTimer: Timer?
 
     // Settings controls
     private let dashboardField = NSTextField()
@@ -985,7 +1091,12 @@ final class MainWindowController: NSWindowController, NSTextFieldDelegate, NSTex
 
         loadIntoForm()
         worker.onStateChange = { [weak self] state in self?.render(state) }
+        worker.onAttention = { [weak self] title, body in
+            self?.showChallengeBanner(title: title, body: body)
+            self?.raiseAttention(title: title, body: body)
+        }
         render(worker.state)
+        startChallengeTimer()
     }
 
     required init?(coder: NSCoder) { fatalError("not supported") }
@@ -1021,9 +1132,39 @@ final class MainWindowController: NSWindowController, NSTextFieldDelegate, NSTex
         stopButton.bezelStyle = .rounded
         stopButton.controlSize = .large
 
-        let buttons = NSStackView(views: [startButton, stopButton])
+        pauseButton.target = self
+        pauseButton.action = #selector(pauseApplyTapped)
+        pauseButton.bezelStyle = .rounded
+        pauseButton.controlSize = .large
+        pauseButton.keyEquivalent = "p"
+        pauseButton.toolTip = "Stop clicking so you can finish this application in Chrome. Resume later to continue."
+
+        let buttons = NSStackView(views: [startButton, stopButton, pauseButton])
         buttons.orientation = .horizontal
         buttons.spacing = 10
+
+        challengeTitle.font = .systemFont(ofSize: 14, weight: .semibold)
+        challengeTitle.textColor = .systemOrange
+        challengeBody.font = .systemFont(ofSize: 12)
+        challengeBody.textColor = .labelColor
+        resumeButton.target = self
+        resumeButton.action = #selector(resumeChallengeTapped)
+        resumeButton.bezelStyle = .rounded
+        resumeButton.controlSize = .large
+        resumeButton.keyEquivalent = "r"
+        let challengeStack = NSStackView(views: [challengeTitle, challengeBody, resumeButton])
+        challengeStack.orientation = .vertical
+        challengeStack.alignment = .leading
+        challengeStack.spacing = 8
+        challengeStack.edgeInsets = NSEdgeInsets(top: 10, left: 12, bottom: 10, right: 12)
+        challengeBox.boxType = .custom
+        challengeBox.fillColor = NSColor.systemOrange.withAlphaComponent(0.12)
+        challengeBox.borderColor = .systemOrange
+        challengeBox.cornerRadius = 8
+        challengeBox.contentViewMargins = .init(width: 0, height: 0)
+        challengeBox.contentView = challengeStack
+        challengeBox.isHidden = true
+        challengeBox.translatesAutoresizingMaskIntoConstraints = false
 
         // Starting the agent only makes it listen; a cycle still has to be queued.
         // Which boards to search and how many to apply to are chosen per run on the
@@ -1065,7 +1206,7 @@ final class MainWindowController: NSWindowController, NSTextFieldDelegate, NSTex
         footer.orientation = .horizontal
         footer.spacing = 8
 
-        let stack = NSStackView(views: [statusRow, buttons, cycleRow, checklistStack, logHeader])
+        let stack = NSStackView(views: [statusRow, buttons, challengeBox, cycleRow, checklistStack, logHeader])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 12
@@ -1084,6 +1225,7 @@ final class MainWindowController: NSWindowController, NSTextFieldDelegate, NSTex
             logScroll.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 18),
             logScroll.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -18),
             logScroll.bottomAnchor.constraint(equalTo: footer.topAnchor, constant: -10),
+            challengeBox.widthAnchor.constraint(equalTo: stack.widthAnchor),
 
             footer.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 18),
             footer.trailingAnchor.constraint(lessThanOrEqualTo: root.trailingAnchor, constant: -18),
@@ -1693,13 +1835,16 @@ final class MainWindowController: NSWindowController, NSTextFieldDelegate, NSTex
             statusDetail.stringValue = "The agent is not looking for work."
             stopButton.isEnabled = false
             stopButton.title = "Stop Agent"
+            pauseButton.isEnabled = false
             stopLogTimer()
+            startChallengeTimer()
         case .running:
             statusDot.textColor = .systemGreen
             statusTitle.stringValue = "Running"
             statusDetail.stringValue = "Listening for requests from the dashboard."
             stopButton.isEnabled = true
             stopButton.title = "Stop Agent"
+            pauseButton.isEnabled = true
             startLogTimer()
         case .stopping:
             statusDot.textColor = .systemOrange
@@ -1707,8 +1852,10 @@ final class MainWindowController: NSWindowController, NSTextFieldDelegate, NSTex
             statusDetail.stringValue = "Finishing the current job. Click again to stop immediately."
             stopButton.isEnabled = true
             stopButton.title = "Force Stop"
+            pauseButton.isEnabled = false
         }
         refreshReadiness()
+        refreshChallenge()
         NotificationCenter.default.post(name: .workerStateChanged, object: state)
     }
 
@@ -1726,11 +1873,121 @@ final class MainWindowController: NSWindowController, NSTextFieldDelegate, NSTex
         refreshLog()
     }
 
+    private func startChallengeTimer() {
+        guard challengeTimer == nil else { return }
+        refreshChallenge()
+        challengeTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
+            self?.refreshChallenge()
+        }
+    }
+
+    private func raiseAttention(title: String, body: String) {
+        NSApp.activate(ignoringOtherApps: true)
+        window?.makeKeyAndOrderFront(nil)
+        NSApp.requestUserAttention(.criticalRequest)
+        NSSound.beep()
+        guard Notifier.needsModal(title) else { return }
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = body + "\n\nOK only dismisses this dialog. The Chrome tab stays open. Solve the CAPTCHA or question there, then click Resume automated apply."
+        alert.alertStyle = .critical
+        alert.addButton(withTitle: "I'll handle it")
+        alert.addButton(withTitle: "Resume automated apply")
+        let response = alert.runModal()
+        if response == .alertSecondButtonReturn {
+            resumeChallengeTapped()
+        }
+    }
+
     private func refreshLog() {
         let text = worker.recentLog()
-        guard text != logView.string else { return }
-        logView.string = text
-        logView.scrollToEndOfDocument(nil)
+        if text != logView.string {
+            logView.string = text
+            logView.scrollToEndOfDocument(nil)
+        }
+        refreshChallenge()
+    }
+
+    private func showChallengeBanner(title: String, body: String) {
+        challengeTitle.stringValue = title
+        challengeBody.stringValue = body
+        challengeBox.isHidden = false
+        if worker.state == .running {
+            statusDot.textColor = .systemOrange
+            statusTitle.stringValue = "Paused — needs you"
+            statusDetail.stringValue = "The agent stopped clicking. Chrome is yours until you resume."
+        }
+    }
+
+    private func refreshChallenge() {
+        ChallengeService.status { [weak self] result in
+            guard let self else { return }
+            switch result {
+            case .success(let challenge):
+                if let challenge {
+                    self.showChallengeBanner(title: challenge.title, body: challenge.body)
+                    self.pauseButton.isEnabled = false
+                } else {
+                    self.pauseButton.isEnabled = self.worker.state == .running
+                    if !self.challengeBox.isHidden {
+                        self.challengeBox.isHidden = true
+                        self.resumeButton.isEnabled = true
+                        self.resumeButton.title = "Resume automated apply"
+                        if self.worker.state == .running {
+                            self.statusDot.textColor = .systemGreen
+                            self.statusTitle.stringValue = "Running"
+                            self.statusDetail.stringValue = "Listening for requests from the dashboard."
+                        }
+                    }
+                }
+            case .failure:
+                break
+            }
+        }
+    }
+
+    @objc func pauseApplyTapped() {
+        pauseButton.isEnabled = false
+        pauseButton.title = "Pausing…"
+        ChallengeService.pause { [weak self] result in
+            guard let self else { return }
+            self.pauseButton.title = "Pause apply"
+            switch result {
+            case .success:
+                self.showChallengeBanner(
+                    title: "Paused — finish this in Chrome if you want",
+                    body: "The agent stopped clicking. Complete the application in JobAgent Chrome if you want, then click Resume when you want it to continue."
+                )
+                self.refreshChallenge()
+            case .failure(let error):
+                self.pauseButton.isEnabled = self.worker.state == .running
+                self.statusDetail.stringValue = error.message
+            }
+        }
+    }
+
+    @objc func resumeChallengeTapped() {
+        resumeButton.isEnabled = false
+        resumeButton.title = "Resuming…"
+        ChallengeService.resume { [weak self] result in
+            guard let self else { return }
+            switch result {
+            case .success:
+                self.challengeBox.isHidden = true
+                self.resumeButton.isEnabled = true
+                self.resumeButton.title = "Resume automated apply"
+                self.pauseButton.isEnabled = self.worker.state == .running
+                if self.worker.state == .running {
+                    self.statusDot.textColor = .systemGreen
+                    self.statusTitle.stringValue = "Running"
+                    self.statusDetail.stringValue = "Resumed. The agent will continue if the page is clear."
+                }
+            case .failure(let error):
+                self.resumeButton.isEnabled = true
+                self.resumeButton.title = "Resume automated apply"
+                self.challengeBody.stringValue = error.message
+            }
+        }
     }
 
     // MARK: Actions
@@ -1883,7 +2140,7 @@ extension Notification.Name {
 
 // MARK: - App
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
     private var statusItem: NSStatusItem!
     private var main: MainWindowController?
     private let worker = WorkerController.shared
@@ -1902,12 +2159,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(openItem)
         menu.addItem(.separator())
 
+        let pauseItem = NSMenuItem(title: "Pause apply", action: #selector(pauseApplyFromMenu), keyEquivalent: "p")
+        pauseItem.target = self
+        menu.addItem(pauseItem)
+        let resumeItem = NSMenuItem(title: "Resume apply", action: #selector(resumeApplyFromMenu), keyEquivalent: "r")
+        resumeItem.target = self
+        menu.addItem(resumeItem)
+        menu.addItem(.separator())
+
         let quitItem = NSMenuItem(title: "Quit", action: #selector(quit), keyEquivalent: "q")
         quitItem.target = self
         menu.addItem(quitItem)
         statusItem.menu = menu
 
         // Asked once, up front, so the first real notification is not silently dropped.
+        // The delegate is required so banners still appear while JobAgent is in front;
+        // without willPresent, macOS swallows them as "already looking at the app".
+        UNUserNotificationCenter.current().delegate = self
         Notifier.requestPermission()
 
         NotificationCenter.default.addObserver(
@@ -1937,6 +2205,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return true
     }
 
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification,
+        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+    ) {
+        completionHandler([.banner, .list, .sound])
+    }
+
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        didReceive response: UNNotificationResponse,
+        withCompletionHandler completionHandler: @escaping () -> Void
+    ) {
+        openMain()
+        completionHandler()
+    }
+
     @objc private func stateChanged(_ note: Notification) {
         renderStatusItem(note.object as? WorkerState ?? .stopped)
     }
@@ -1957,6 +2242,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func openMain() {
         if main == nil { main = MainWindowController() }
         main?.present()
+    }
+
+    @objc private func pauseApplyFromMenu() {
+        openMain()
+        main?.pauseApplyTapped()
+    }
+
+    @objc private func resumeApplyFromMenu() {
+        openMain()
+        main?.resumeChallengeTapped()
     }
 
     @objc private func quit() {

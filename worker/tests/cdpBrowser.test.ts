@@ -15,10 +15,10 @@ test("managed CDP cleanup is restricted to loopback endpoints", () => {
   );
 });
 
-test("managed CDP cleanup creates a fresh tab and closes old page targets", async () => {
+test("managed CDP cleanup creates a fresh tab and keeps live apply pages", async () => {
   const targets = new Map<string, CdpTarget>([
-    ["old-indeed", { id: "old-indeed", type: "page", url: "https://www.indeed.com/jobs" }],
-    ["old-dice", { id: "old-dice", type: "page", url: "https://www.dice.com/jobs" }],
+    ["old-indeed", { id: "old-indeed", type: "page", url: "https://smartapply.indeed.com/beta/indeedapply/form/questions-module/questions/1" }],
+    ["old-blank", { id: "old-blank", type: "page", url: "about:blank" }],
     ["service-worker", { id: "service-worker", type: "service_worker", url: "https://example.com/sw.js" }],
   ]);
   const requests: Array<{ method: string; url: string }> = [];
@@ -51,11 +51,11 @@ test("managed CDP cleanup creates a fresh tab and closes old page targets", asyn
 
   assert.deepEqual(result, {
     freshTargetId: "fresh-blank",
-    closedTargetIds: ["old-indeed", "old-dice"],
+    closedTargetIds: ["old-blank"],
   });
-  assert.deepEqual([...targets.keys()].sort(), ["fresh-blank", "service-worker"]);
+  assert.deepEqual([...targets.keys()].sort(), ["fresh-blank", "old-indeed", "service-worker"]);
   assert.equal(requests.some((request) => request.method === "PUT" && request.url.includes("/json/new?")), true);
-  assert.equal(requests.some((request) => request.url.endsWith("/json/close/old-indeed")), true);
-  assert.equal(requests.some((request) => request.url.endsWith("/json/close/old-dice")), true);
+  assert.equal(requests.some((request) => request.url.endsWith("/json/close/old-indeed")), false);
+  assert.equal(requests.some((request) => request.url.endsWith("/json/close/old-blank")), true);
   assert.equal(requests.some((request) => request.url.endsWith("/json/close/service-worker")), false);
 });

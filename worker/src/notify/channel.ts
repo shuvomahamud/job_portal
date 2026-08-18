@@ -26,6 +26,20 @@ export type NotifyRunSummaryInput = {
   needsAnswers: number;
   blocked: number;
   failed: number;
+  stalled?: number;
+  needsManual?: number;
+};
+
+/**
+ * Form is still open but the worker cannot continue. Distinct from a CAPTCHA (that
+ * already has notifyBrowserBlocked) and from unanswered fields (notifyQuestions).
+ * Stalls used to land in the quiet "Apply run finished · 1 failed" summary, which
+ * never asked anyone to look at the page.
+ */
+export type NotifyStuckInput = {
+  jobTitle: string;
+  company: string;
+  kind: "stalled" | "needs_manual";
 };
 
 export type NotifyBrowserBlockedInput = {
@@ -41,6 +55,7 @@ export type NotificationChannel = {
   notifyAnswerAccepted(input: NotifyAnswerAcceptedInput): Promise<void>;
   notifyRunSummary(input: NotifyRunSummaryInput): Promise<void>;
   notifyBrowserBlocked(input: NotifyBrowserBlockedInput): Promise<void>;
+  notifyStuck(input: NotifyStuckInput): Promise<void>;
 };
 
 /** Body text for a batched question notification. Shared so channels read alike. */
@@ -64,6 +79,19 @@ export function formatBrowserBlockedBody(input: NotifyBrowserBlockedInput): stri
       ? "Open the dashboard and choose “Open browser to unblock”."
       : "Solve it in JobAgent Chrome, then click Resume automated apply.";
   return `${input.message}\n${next}`;
+}
+
+export function formatStuckTitle(kind: NotifyStuckInput["kind"]): string {
+  return kind === "stalled" ? "An application stalled" : "An application needs you";
+}
+
+export function formatStuckBody(input: NotifyStuckInput): string {
+  const where = [input.jobTitle, input.company].filter(Boolean).join(" at ");
+  const next =
+    input.kind === "stalled"
+      ? "The form could not be advanced. JobAgent Chrome is still on that page — finish it there, then click Resume automated apply."
+      : "The worker stopped before submitting. JobAgent Chrome is still on that page — check the form, then click Resume automated apply.";
+  return [where, next].filter(Boolean).join("\n");
 }
 
 export function formatQuestionsTitle(input: NotifyQuestionsInput): string {
@@ -113,6 +141,9 @@ export function fanOut(channels: NotificationChannel[]): NotificationChannel {
     },
     async notifyBrowserBlocked(input) {
       for (const channel of channels) await channel.notifyBrowserBlocked(input);
+    },
+    async notifyStuck(input) {
+      for (const channel of channels) await channel.notifyStuck(input);
     },
   };
 }

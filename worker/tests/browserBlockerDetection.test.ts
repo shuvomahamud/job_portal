@@ -7,22 +7,31 @@ function page(
   url: string,
   body: string,
   challengeElements: Array<{ visible: boolean }> = [],
+  frameBodies: string[] = [],
 ): PageLike {
-  return {
-    url: () => url,
+  const root = (text: string, elements: Array<{ visible: boolean }>) => ({
     locator: (selector: string) => {
-      const elements = selector === "body" ? [{ visible: true }] : challengeElements;
+      const matched = selector === "body" ? [{ visible: true }] : elements;
       const locator = {
-        innerText: async () => (selector === "body" ? body : ""),
-        count: async () => elements.length,
+        innerText: async () => (selector === "body" ? text : ""),
+        count: async () => matched.length,
         nth: (index: number) => ({
           ...locator,
-          isVisible: async () => elements[index]?.visible ?? false,
+          isVisible: async () => matched[index]?.visible ?? false,
         }),
-        isVisible: async () => elements[0]?.visible ?? false,
+        isVisible: async () => matched[0]?.visible ?? false,
       };
       return locator;
     },
+  });
+  return {
+    url: () => url,
+    ...root(body, challengeElements),
+    frames: () =>
+      frameBodies.map((text) => ({
+        ...root(text, []),
+        isDetached: () => false,
+      })),
   } as unknown as PageLike;
 }
 
@@ -85,6 +94,31 @@ test("still detects an explicit login gate", async () => {
 test("detects Indeed's I'm not a robot checkbox wording", async () => {
   const blocker = await detectBrowserBlocker(
     page("https://smartapply.indeed.com/beta/indeedapply/form/review", "I'm not a robot"),
+    "indeed",
+  );
+  assert.equal(blocker?.kind, "captcha");
+});
+
+test("detects Indeed's image-select challenge inside a reCAPTCHA iframe", async () => {
+  const blocker = await detectBrowserBlocker(
+    page(
+      "https://smartapply.indeed.com/beta/indeedapply/form/review",
+      "Review your application. This site is protected by reCAPTCHA.",
+      [],
+      ["Select all images with cars. Click verify once there are none left."],
+    ),
+    "indeed",
+  );
+  assert.equal(blocker?.kind, "captcha");
+});
+
+test("a visible recaptcha bframe on the review page is a challenge", async () => {
+  const blocker = await detectBrowserBlocker(
+    page(
+      "https://smartapply.indeed.com/beta/indeedapply/form/review",
+      "Review your application. Submit your application.",
+      [{ visible: true }],
+    ),
     "indeed",
   );
   assert.equal(blocker?.kind, "captcha");

@@ -23,6 +23,9 @@ function recordingChannel(
     async notifyBrowserBlocked() {
       log.push(`${name}:blocked`);
     },
+    async notifyStuck() {
+      log.push(`${name}:stuck`);
+    },
   };
 }
 
@@ -47,6 +50,25 @@ test("push is additive — the Mac notification still fires", () => {
     message: "blocked",
   }).then(() => {
     assert.deepEqual(log, ["desktop:blocked", "push:blocked"]);
+  });
+});
+
+test("a stall fans out to Mac and phone on the same ntfy channel", () => {
+  const log: string[] = [];
+  const channel = resolveChannel(
+    cfg({ JOB_APPLY_PUSH_ENABLED: true, NTFY_TOPIC: "a-long-secret-topic" }),
+    {
+      createDesktop: () => recordingChannel("desktop", log),
+      createDashboard: () => recordingChannel("dashboard", log),
+      createPush: () => recordingChannel("push", log),
+    },
+  );
+  return channel.notifyStuck({
+    jobTitle: "Software Developer",
+    company: "PERSANTE",
+    kind: "stalled",
+  }).then(() => {
+    assert.deepEqual(log, ["desktop:stuck", "push:stuck"]);
   });
 });
 

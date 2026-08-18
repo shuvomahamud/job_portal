@@ -4,9 +4,11 @@ import {
   formatQuestionsBody,
   formatQuestionsTitle,
   formatBrowserBlockedBody,
+  formatStuckBody,
+  formatStuckTitle,
   type NotifyQuestionsInput,
 } from "../src/notify/channel";
-import { createDesktopChannel, DESKTOP_NOTIFY_PREFIX } from "../src/notify/desktopChannel";
+import { createDesktopChannel, DESKTOP_NOTIFY_PREFIX, setDesktopNotifyWriter } from "../src/notify/desktopChannel";
 
 const input = (count: number): NotifyQuestionsInput => ({
   jobTitle: "Senior .NET Developer",
@@ -19,18 +21,16 @@ const input = (count: number): NotifyQuestionsInput => ({
   })),
 });
 
-/** Collects everything the channel writes to stdout while `run` is in flight. */
+/** Collects everything the channel writes for JobAgent while `run` is in flight. */
 async function captureStdout(run: () => Promise<unknown>): Promise<string[]> {
   const chunks: string[] = [];
-  const original = process.stdout.write.bind(process.stdout);
-  process.stdout.write = ((chunk: string | Uint8Array) => {
-    chunks.push(String(chunk));
-    return true;
-  }) as typeof process.stdout.write;
+  setDesktopNotifyWriter((line) => {
+    chunks.push(line);
+  });
   try {
     await run();
   } finally {
-    process.stdout.write = original;
+    setDesktopNotifyWriter(null);
   }
   return chunks
     .join("")
@@ -84,6 +84,17 @@ test("CAPTCHA notifications tell the user to resume after solving it", () => {
   });
   assert.match(body, /Resume automated apply/);
   assert.doesNotMatch(body, /Open browser to unblock/);
+});
+
+test("a stall asks the user to look at the open form", () => {
+  const body = formatStuckBody({
+    jobTitle: "Software Developer",
+    company: "PERSANTE",
+    kind: "stalled",
+  });
+  assert.equal(formatStuckTitle("stalled"), "An application stalled");
+  assert.match(body, /PERSANTE/);
+  assert.match(body, /Resume automated apply/);
 });
 
 test("access-denied notifications still point at Open browser to unblock", () => {

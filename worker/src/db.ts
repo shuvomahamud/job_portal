@@ -976,6 +976,18 @@ export async function queueNextApplicationIfIdle(input: {
     .limit(1);
   if (existing) return null;
 
+  const [inFlight] = await database
+    .select({ id: schema.applications.id })
+    .from(schema.applications)
+    .where(
+      and(
+        eq(schema.applications.userId, input.requestedBy),
+        inArray(schema.applications.status, ["filling", "awaiting_answer", "submitting"]),
+      ),
+    )
+    .limit(1);
+  if (inFlight) return null;
+
   const [command] = await database
     .insert(schema.commands)
     .values({

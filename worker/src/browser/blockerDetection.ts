@@ -19,26 +19,31 @@ export class BrowserInterventionRequiredError extends Error {
 }
 
 const CAPTCHA_TEXT =
-  /verify (?:that )?you are (?:a )?human|unusual traffic|security check|press and hold|complete the challenge|cloudflare ray id|i['’]?m not a robot|i am not a robot|\bnot a robot\b/i;
+  /verify (?:that )?you are (?:a )?human|unusual traffic|security check|press and hold|complete the challenge|cloudflare ray id|i['’]?m not a robot|i am not a robot|\bnot a robot\b|select all (?:the )?(?:images|squares|pictures)|click (?:on )?all images with/i;
 const ACCESS_DENIED_TEXT =
   /access denied|temporarily blocked|request blocked|automated traffic|forbidden|too many requests/i;
 const LOGIN_TEXT =
   /sign in to continue|log in to continue|session (?:has )?expired|authentication required/i;
 const LOGIN_URL = /\/(?:login|signin|sign-in|auth)(?:[/?#]|$)|secure\.indeed\.com\/account/i;
 
-async function hasVisibleChallengeElement(page: PageLike): Promise<boolean> {
-  const candidates = page.locator(
-    [
-      'iframe[src*="recaptcha" i]',
-      'iframe[src*="google.com/recaptcha" i]',
-      'iframe[title*="recaptcha" i]',
-      'iframe[title*="not a robot" i]',
-      'iframe[src*="hcaptcha" i]',
-      'iframe[src*="challenge" i]',
-      "[data-sitekey]",
-      'input[name="cf-turnstile-response"]',
-    ].join(", "),
-  );
+const CHALLENGE_SELECTOR = [
+  'iframe[src*="recaptcha" i]',
+  'iframe[src*="google.com/recaptcha" i]',
+  'iframe[src*="recaptcha/api2/bframe" i]',
+  'iframe[title*="recaptcha" i]',
+  'iframe[title*="not a robot" i]',
+  'iframe[src*="hcaptcha" i]',
+  'iframe[src*="challenge" i]',
+  "#rc-imageselect",
+  ".rc-imageselect-target",
+  "[data-sitekey]",
+  'input[name="cf-turnstile-response"]',
+].join(", ");
+
+type ChallengeRoot = Pick<PageLike, "locator">;
+
+async function hasVisibleChallengeElement(root: ChallengeRoot): Promise<boolean> {
+  const candidates = root.locator(CHALLENGE_SELECTOR);
   const count = await candidates.count().catch(() => 0);
   for (let index = 0; index < count; index += 1) {
     if (await candidates.nth(index).isVisible({ timeout: 500 }).catch(() => false)) {
@@ -46,6 +51,30 @@ async function hasVisibleChallengeElement(page: PageLike): Promise<boolean> {
     }
   }
   return false;
+}
+
+async function collectText(root: ChallengeRoot): Promise<string> {
+  return (await root.locator("body").innerText({ timeout: 2_000 }).catch(() => ""))
+    .replace(/\s+/g, " ")
+    .slice(0, 8_000);
+}
+
+/**
+ * Image grids live inside a cross-origin reCAPTCHA iframe. `body` on the apply page
+ * never sees "Select all images with cars", so the detector has to look through frames
+ * and at the bframe widget itself — without treating Indeed's footer "protected by
+ * reCAPTCHA" notice as a blocker.
+ */
+async function challengeSignals(page: PageLike): Promise<{ visible: boolean; text: string }> {
+  const chunks = [await collectText(page)];
+  let visible = await hasVisibleChallengeElement(page);
+  const frames = typeof page.frames === "function" ? page.frames() : [];
+  for (const frame of frames) {
+    if (typeof frame.isDetached === "function" && frame.isDetached()) continue;
+    if (!visible) visible = await hasVisibleChallengeElement(frame);
+    chunks.push(await collectText(frame));
+  }
+  return { visible, text: chunks.filter(Boolean).join("\n").slice(0, 30_000) };
 }
 
 export function siteFromUrl(rawUrl: string): BrowserBlockerSite {
@@ -71,14 +100,11 @@ export async function detectBrowserBlocker(
 ): Promise<BrowserBlocker | null> {
   const pageUrl = page.url();
   const site = expectedSite && expectedSite !== "unknown" ? expectedSite : siteFromUrl(pageUrl);
-  const body = (await page.locator("body").innerText({ timeout: 2_000 }).catch(() => ""))
-    .replace(/\s+/g, " ")
-    .slice(0, 30_000);
+  const { visible: visibleCaptcha, text: body } = await challengeSignals(page);
 
   // Indeed embeds invisible reCAPTCHA frames on ordinary search-result pages. Presence
   // alone is therefore not evidence of a blocker; the challenge element must be visible
   // (or the page itself must contain explicit human-verification language).
-  const visibleCaptcha = await hasVisibleChallengeElement(page);
   if (visibleCaptcha || CAPTCHA_TEXT.test(body)) {
     return {
       kind: "captcha",
