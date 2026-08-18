@@ -27,9 +27,11 @@ import {
   buildSuggestion,
   enhanceFieldsWithOllama,
   mapDropdownWithOllama,
+  retrieveAnswersWithOllamaBatch,
 } from "../formfill/suggestions";
+import { computedAnswerFor } from "../formfill/computedAnswers";
 import { optionMatches } from "../formfill/optionMatching";
-import type { DetectedField, MatchSettings } from "../formfill/types";
+import type { DetectedField, FieldSuggestion, MatchSettings } from "../formfill/types";
 import { logger } from "../logger";
 import { challengeNeedsHuman, detectBrowserBlocker, siteFromUrl } from "../browser/blockerDetection";
 import { reportBrowserBlocker } from "../browser/reportBlocker";
@@ -53,8 +55,8 @@ import {
   isApplyPaused,
   setApplyPaused,
 } from "./applyEligibility";
-import { waitForHumanChallenge } from "./waitForHumanChallenge";
-import { adapterFor, isExternalAts, looksLikeAlreadyApplied, sourceUrlAllowed } from "./applySteps";
+import { waitForHumanChallenge, waitForPendingAnswers } from "./waitForHumanChallenge";
+import { adapterFor, isExternalAts, looksLikeAlreadyApplied, looksLikeSubmitted, sourceUrlAllowed } from "./applySteps";
 import { attachResumeFile, clearCoverLetterUploads, resumeDropzoneNeedsFile } from "./resumeUpload";
 import { decideExternalSiteApply } from "./externalSitePolicy";
 import {
@@ -67,6 +69,7 @@ import { decideSubmission } from "./external/submissionGuard";
 import { withOllamaLock } from "../ai/ollamaLock";
 import {
   fillDetectedField,
+  fieldLooksAnswered,
   pendingAsksWhenFormRefused,
   type HumanTyping,
 } from "./fillField";
@@ -924,23 +927,55 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
     const resolvePauseOrChallenge = async (
       page: PageLike,
       screenshotName: string,
-    ): Promise<"continue" | "paused" | "blocked" | "canceled" | "time_limit"> => {
-      if (!(await isApplyPaused(input.userId))) return "continue";
-      const blocker = fixture
-        ? null
-        : await detectBrowserBlocker(page, siteFromUrl(page.url()));
-      if (blocker && challengeNeedsHuman(blocker.kind)) {
-        return handlePageBlocker(page, blocker, screenshotName);
+    ): Promise<"continue" | "paused" | "blocked" | "canceled" | "time_limit" | "already_applied"> => {
+      // Captcha on Indeed's last review page appears *after* the step starts — often
+      // after "Preparing review" clears. Checking only when the user already paused
+      // meant the worker kept clicking Continue through an image grid until max_steps.
+      if (!fixture) {
+        const blocker = await detectBrowserBlocker(page, siteFromUrl(page.url()));
+        if (blocker) {
+          return handlePageBlocker(page, blocker, screenshotName);
+        }
       }
-      return "paused";
+      const held = await holdIfUserPaused(page);
+      if (held === "continue") return "continue";
+      return held;
+    };
+    const stopFromChallenge = async (
+      outcome: "continue" | "paused" | "blocked" | "canceled" | "time_limit" | "already_applied",
+      pausedReason: string,
+    ) => {
+      if (outcome === "continue") return null;
+      if (outcome === "already_applied") {
+        return { stopReason: "already_applied" as const, applicationId: application.id, artifacts: artifactCtx.paths };
+      }
+      if (outcome === "blocked") {
+        return { stopReason: "blocked" as const, applicationId: application.id, artifacts: artifactCtx.paths };
+      }
+      if (outcome === "paused") {
+        await upsertApplication({
+          userId: input.userId,
+          jobId: input.job.id,
+          status: "needs_manual",
+          stopReason: pausedReason,
+        });
+        await finishTrace(artifactCtx, true);
+        return { stopReason: "canceled" as const, applicationId: application.id, artifacts: artifactCtx.paths };
+      }
+      await persistHalt(outcome === "time_limit" ? "application_time_limit" : "canceled");
+      return {
+        stopReason: (outcome === "time_limit" ? "time_limit" : "canceled") as "time_limit" | "canceled",
+        applicationId: application.id,
+        artifacts: artifactCtx.paths,
+      };
     };
     await sleep(
       fixture
         ? 50
         : humanDelayMs(
             {
-              minDelayMs: Math.min(cfg.JOB_BROWSER_MIN_DELAY_MS, 1500),
-              maxDelayMs: Math.min(cfg.JOB_BROWSER_MAX_DELAY_MS, 3000),
+              minDelayMs: Math.min(cfg.JOB_BROWSER_MIN_DELAY_MS, 2500),
+              maxDelayMs: Math.min(cfg.JOB_BROWSER_MAX_DELAY_MS, 5000),
             },
             random,
           ),
@@ -975,6 +1010,60 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
       }
     }
 
+    const persistAlreadyApplied = async (page: PageLike, evidence: Record<string, unknown>) => {
+      await upsertApplication({
+        userId: input.userId,
+        jobId: input.job.id,
+        status: "applied",
+        applyUrl: page.url(),
+        submittedAt: new Date(),
+        appliedAt: new Date(),
+        confirmationEvidence: evidence,
+        stopReason: "already_applied",
+      });
+      await screenshot(artifactCtx, "already-applied");
+      await finishTrace(artifactCtx, false);
+    };
+
+    const pageLooksFinished = async (page: PageLike) => {
+      const text = await page.locator("body").innerText({ timeout: 2_000 }).catch(() => "");
+      return looksLikeAlreadyApplied(text) || looksLikeSubmitted(text);
+    };
+
+    const holdIfUserPaused = async (
+      page: PageLike,
+    ): Promise<"continue" | "canceled" | "time_limit" | "already_applied"> => {
+      if (!(await isApplyPaused(input.userId))) return "continue";
+      logger.info("Apply paused; Chrome is yours until Resume", {
+        commandId: input.commandId,
+        jobId: input.job.id,
+        pageUrl: page.url(),
+      });
+      await upsertApplication({
+        userId: input.userId,
+        jobId: input.job.id,
+        status: "filling",
+        stopReason: "user_paused",
+        applyUrl: page.url(),
+      });
+      const wait = await waitForPendingAnswers({
+        isPaused: () => isApplyPaused(input.userId),
+        setPaused: (paused) => setApplyPaused(input.userId, paused),
+        shouldHalt: async () =>
+          (await applyShouldHalt(input.commandId)) ||
+          Boolean(input.deadlineAt && Date.now() >= input.deadlineAt),
+      });
+      if (wait === "aborted") {
+        if (input.deadlineAt && Date.now() >= input.deadlineAt) return "time_limit";
+        return "canceled";
+      }
+      if (await pageLooksFinished(page)) {
+        await persistAlreadyApplied(page, { humanCompleted: true, pageUrl: page.url() });
+        return "already_applied";
+      }
+      return "continue";
+    };
+
     const applyButton = await adapter.findApplyButton(input.page);
     if (applyButton) {
       await applyButton.click({ timeout: 5000 });
@@ -985,21 +1074,17 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
     const activePage = pages[pages.length - 1] ?? input.page;
     artifactCtx.page = activePage;
     const applyUrl = activePage.url();
-    const landingText = await activePage.locator("body").innerText({ timeout: 2_000 }).catch(() => "");
-    if (looksLikeAlreadyApplied(landingText)) {
-      await upsertApplication({
-        userId: input.userId,
-        jobId: input.job.id,
-        status: "applied",
-        applyUrl,
-        submittedAt: new Date(),
-        appliedAt: new Date(),
-        confirmationEvidence: { alreadyAppliedPage: true },
-        stopReason: "already_applied",
-      });
-      await screenshot(artifactCtx, "already-applied");
-      await finishTrace(artifactCtx, false);
-      return { stopReason: "already_applied", applicationId: application.id, artifacts: artifactCtx.paths };
+    // Dice's confirmation page often replaces Easy Apply after the click, not in the
+    // same paint. A single 800ms glance still sees the job post and later stalls on
+    // "You've already applied to this job!".
+    const alreadyAppliedDeadline = Date.now() + (fixture ? 50 : 6_000);
+    while (Date.now() < alreadyAppliedDeadline) {
+      if (await pageLooksFinished(activePage)) {
+        await persistAlreadyApplied(activePage, { alreadyAppliedPage: true });
+        return { stopReason: "already_applied", applicationId: application.id, artifacts: artifactCtx.paths };
+      }
+      if (fixture) break;
+      await sleep(400);
     }
     const external = isExternalAts(applyUrl, adapter.allowedApplyHosts);
     let onExternalSite = false;
@@ -1175,30 +1260,13 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
     let stallRetries = 0;
     /** Set after clicking to advance, so an unchanged page next round means the form refused. */
     let clickedWithoutProgress = false;
+    let waitedForAnswers = false;
+    let resumeAdvance = false;
 
     for (let step = 0; step < cfg.JOB_APPLY_MAX_STEPS; step += 1) {
       const pauseOrChallenge = await resolvePauseOrChallenge(activePage, `blocked-step-${step}`);
-      if (pauseOrChallenge === "paused") {
-        await upsertApplication({
-          userId: input.userId,
-          jobId: input.job.id,
-          status: "needs_manual",
-          stopReason: "apply_paused",
-        });
-        await finishTrace(artifactCtx, true);
-        return { stopReason: "canceled", applicationId: application.id, artifacts: artifactCtx.paths };
-      }
-      if (pauseOrChallenge === "blocked") {
-        return { stopReason: "blocked", applicationId: application.id, artifacts: artifactCtx.paths };
-      }
-      if (pauseOrChallenge === "canceled") {
-        await persistHalt("canceled");
-        return { stopReason: "canceled", applicationId: application.id, artifacts: artifactCtx.paths };
-      }
-      if (pauseOrChallenge === "time_limit") {
-        await persistHalt("application_time_limit");
-        return { stopReason: "time_limit", applicationId: application.id, artifacts: artifactCtx.paths };
-      }
+      const stopped = await stopFromChallenge(pauseOrChallenge, "apply_paused");
+      if (stopped) return stopped;
       if (input.deadlineAt && Date.now() >= input.deadlineAt) {
         await upsertApplication({
           userId: input.userId,
@@ -1212,6 +1280,11 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
       if (await applyShouldHalt(input.commandId)) {
         await persistHalt("canceled");
         return { stopReason: "canceled", applicationId: application.id, artifacts: artifactCtx.paths };
+      }
+
+      if (await pageLooksFinished(activePage)) {
+        await persistAlreadyApplied(activePage, { alreadyAppliedPage: true, duringStep: step });
+        return { stopReason: "already_applied", applicationId: application.id, artifacts: artifactCtx.paths };
       }
 
       const detectedStepBlocker = fixture
@@ -1287,12 +1360,18 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
         (await looksLikeTransientLoad(frame))
       ) {
         const wait = await waitOutTransientLoad(frame, {
+          budgetMs: 45_000,
           shouldHalt: () => applyShouldHalt(input.commandId),
         });
         if (wait === "aborted") {
           await persistHalt("canceled");
           return { stopReason: "canceled", applicationId: application.id, artifacts: artifactCtx.paths };
         }
+        const afterSpinner = await stopFromChallenge(
+          await resolvePauseOrChallenge(activePage, `blocked-step-${step}-after-spinner`),
+          "apply_paused",
+        );
+        if (afterSpinner) return afterSpinner;
         // Same logical step: the wait used a time budget, not another JOB_APPLY_MAX_STEPS
         // iteration. Re-scan so a review page that just finished loading still gets filled.
         fields = await detectFields(frame);
@@ -1322,8 +1401,18 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
         postalCode: answers.find((answer) => answer.category === "zip")?.answerValue ?? null,
       };
 
+      // Populated once below, before any field is actually filled: every question this
+      // page has that the deterministic matcher cannot answer, resolved in one call
+      // against the answer bank rather than one call per field. A computed question — a
+      // date, not a fact — never reaches this at all; it is resolved without asking
+      // anyone, human or model, because the answer changes every day and there is
+      // nothing to look up.
+      const retrievedByFieldId = new Map<string, FieldSuggestion>();
+
       const applyOneField = async (field: DetectedField) => {
-        const suggestion = buildSuggestion(field, answers);
+        let suggestion = buildSuggestion(field, answers, matchSettings, {
+          company: input.job.company,
+        });
         let suggestedValue = suggestion.suggestedValue || undefined;
         let dropdownMapped = false;
         if (
@@ -1342,7 +1431,7 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
             dropdownMapped = true;
           }
         }
-        const action = decideFieldAction({
+        let action = decideFieldAction({
           field,
           match: suggestion.match,
           savedAnswer: suggestion.savedAnswer,
@@ -1350,6 +1439,37 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
           trustLlmAnswers: cfg.JOB_APPLY_TRUST_LLM_ANSWERS,
           dropdownMapped,
         });
+        if (action.kind === "ask") {
+          // Resolved already, once, for every question this page had — not here. A
+          // per-field call at this point is exactly what made a busy screening step burn
+          // through the whole application's call budget before reaching its later fields.
+          const retrieved = retrievedByFieldId.get(field.id);
+          if (retrieved?.suggestedValue) {
+            suggestion = retrieved;
+            suggestedValue = retrieved.suggestedValue;
+            dropdownMapped = false;
+            if (
+              field.options.length > 0 &&
+              !optionMatches(field.options, suggestedValue)
+            ) {
+              const mapped = await withOllamaLock("applying", () =>
+                mapDropdownWithOllama(field, suggestedValue!, matchSettings),
+              );
+              if (mapped) {
+                suggestedValue = mapped;
+                dropdownMapped = true;
+              }
+            }
+            action = decideFieldAction({
+              field,
+              match: suggestion.match,
+              savedAnswer: suggestion.savedAnswer,
+              suggestedValue,
+              trustLlmAnswers: cfg.JOB_APPLY_TRUST_LLM_ANSWERS,
+              dropdownMapped,
+            });
+          }
+        }
         plan.push({
           step,
           selector: field.selector,
@@ -1360,6 +1480,7 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
 
         if (mode === "dry_run") return;
         if (action.kind === "ask") {
+          if (fieldLooksAnswered(field)) return;
           asks.push({ field, reason: action.reason });
           return;
         }
@@ -1393,8 +1514,12 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
           // candidate's current state or ZIP could turn "Copenhagen" into
           // "Copenhagen, NY" when Indeed's autocomplete misses the first query.
           isHistoricalResumeLocationField(field) ? {} : locationExtras,
-        );
+        ).catch((error: unknown) => ({
+          ok: false as const,
+          reason: error instanceof Error ? error.message : String(error),
+        }));
         if (!filled.ok) {
+          if (fieldLooksAnswered(field)) return;
           asks.push({ field, reason: filled.reason });
           return;
         }
@@ -1527,7 +1652,40 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
       }
 
       if (!skipFillBecauseFormRefused) {
+        // One retrieval call for the whole page, made before any field is actually
+        // filled. Which fields need it is found the cheap way first — the same
+        // deterministic buildSuggestion/decideFieldAction pass applyOneField makes for
+        // real a moment later — so the model is only ever asked about a question nothing
+        // else could already answer, and asked about all of them together.
+        if (enhanced.available && llmCalls < 5) {
+          const needsRetrieval = fields.filter((field) => {
+            if (computedAnswerFor(field)) return false;
+            const cheap = buildSuggestion(field, answers, matchSettings, {
+              company: input.job.company,
+            });
+            const action = decideFieldAction({
+              field,
+              match: cheap.match,
+              savedAnswer: cheap.savedAnswer,
+              suggestedValue: cheap.suggestedValue || undefined,
+              trustLlmAnswers: cfg.JOB_APPLY_TRUST_LLM_ANSWERS,
+              dropdownMapped: false,
+            });
+            return action.kind === "ask";
+          });
+          if (needsRetrieval.length) {
+            llmCalls += 1;
+            const batch = (await withOllamaLock("applying", () =>
+              retrieveAnswersWithOllamaBatch(needsRetrieval, answers, matchSettings),
+            )) ?? new Map<string, FieldSuggestion>();
+            for (const [fieldId, suggestion] of batch) retrievedByFieldId.set(fieldId, suggestion);
+          }
+        }
+
         for (const field of fields) {
+          const held = await holdIfUserPaused(activePage);
+          const heldStop = await stopFromChallenge(held, "user_paused");
+          if (heldStop) return heldStop;
           await applyOneField(field);
         }
       }
@@ -1548,13 +1706,33 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
 
       if (await looksLikeTransientLoad(frame)) {
         const wait = await waitOutTransientLoad(frame, {
-          budgetMs: 20_000,
+          budgetMs: 75_000,
           shouldHalt: () => applyShouldHalt(input.commandId),
         });
         if (wait === "aborted") {
           await persistHalt("canceled");
           return { stopReason: "canceled", applicationId: application.id, artifacts: artifactCtx.paths };
         }
+        // Image CAPTCHA often lands on the review page the moment this overlay clears.
+        const afterLoad = await stopFromChallenge(
+          await resolvePauseOrChallenge(activePage, `blocked-step-${step}-after-load`),
+          "apply_paused",
+        );
+        if (afterLoad) return afterLoad;
+        // Still spinning after a long wait: do not identity-check or click a Submit that
+        // belongs to the overlay. Stay on this logical step by skipping the rest of the
+        // iteration only after the captcha check above had a chance to pause in place.
+        if (wait !== "cleared" || (await looksLikeTransientLoad(frame))) {
+          previousFingerprint = fingerprint;
+          clickedWithoutProgress = false;
+          continue;
+        }
+      } else {
+        const midStepChallenge = await stopFromChallenge(
+          await resolvePauseOrChallenge(activePage, `blocked-step-${step}-before-advance`),
+          "apply_paused",
+        );
+        if (midStepChallenge) return midStepChallenge;
       }
 
       if (mode === "dry_run") {
@@ -1570,68 +1748,83 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
         return { stopReason: "dry_run", applicationId: application.id, artifacts: artifactCtx.paths };
       }
 
-      if (asks.length) {
-        const channel = resolveNotifyChannel(cfg);
-        const ttlMs = cfg.JOB_APPLY_QUESTION_TTL_HOURS * 60 * 60 * 1000;
-        const expiresAt = new Date(Date.now() + ttlMs);
-        // Record every gap first, then raise a single notification for the whole
-        // application — one alert listing N questions, not N alerts.
-        const recorded: Array<{ rowId: string; summary: PendingQuestionSummary }> = [];
-        for (const ask of asks) {
-          const id = shortId();
-          const [pending] = await database
-            .insert(schema.pendingQuestions)
-            .values({
-              shortId: id,
-              commandId: input.commandId,
-              jobId: input.job.id,
-              applicationId: application.id,
-              userId: input.userId,
-              fieldId: ask.field.id,
-              fieldSelector: ask.field.selector,
-              questionText: ask.field.labelText,
-              normalizedQuestion: ask.field.normalizedQuestion,
-              category: ask.field.fieldCategory,
-              answerType: ask.field.inputType,
-              optionsJson: ask.field.options,
-              required: ask.field.required,
-              riskLevel: ask.field.riskLevel,
-              status: "open",
-              channel: channel.name,
-              contextJson: {
-                applyUrl: activePage.url(),
-                stepIndex: step,
-                screenshotPath: stepScreenshotPath,
-                askReason: ask.reason,
-              },
-              expiresAt,
-            })
-            .returning();
-          if (pending) {
-            recorded.push({
-              rowId: pending.id,
-              summary: {
+      if (asks.length && resumeAdvance) {
+        // Resume means keep going on this tab. The detector may still "ask" for a
+        // question the person already answered on Indeed; exiting as needs_answers
+        // used to complete the command and let the next apply close this page.
+        resumeAdvance = false;
+      } else if (asks.length) {
+        if (!waitedForAnswers) {
+          waitedForAnswers = true;
+          const channel = resolveNotifyChannel(cfg);
+          const ttlMs = cfg.JOB_APPLY_QUESTION_TTL_HOURS * 60 * 60 * 1000;
+          const expiresAt = new Date(Date.now() + ttlMs);
+          // Record every gap first, then raise a single notification for the whole
+          // application — one alert listing N questions, not N alerts.
+          const recorded: Array<{ rowId: string; summary: PendingQuestionSummary }> = [];
+          for (const ask of asks) {
+            const id = shortId();
+            const [pending] = await database
+              .insert(schema.pendingQuestions)
+              .values({
                 shortId: id,
+                commandId: input.commandId,
+                jobId: input.job.id,
+                applicationId: application.id,
+                userId: input.userId,
+                fieldId: ask.field.id,
+                fieldSelector: ask.field.selector,
                 questionText: ask.field.labelText,
-                options: ask.field.options,
+                normalizedQuestion: ask.field.normalizedQuestion,
+                category: ask.field.fieldCategory,
+                answerType: ask.field.inputType,
+                optionsJson: ask.field.options,
                 required: ask.field.required,
-              },
-            });
+                riskLevel: ask.field.riskLevel,
+                status: "open",
+                channel: channel.name,
+                contextJson: {
+                  applyUrl: activePage.url(),
+                  stepIndex: step,
+                  screenshotPath: stepScreenshotPath,
+                  askReason: ask.reason,
+                },
+                expiresAt,
+              })
+              .returning();
+            if (pending) {
+              recorded.push({
+                rowId: pending.id,
+                summary: {
+                  shortId: id,
+                  questionText: ask.field.labelText,
+                  options: ask.field.options,
+                  required: ask.field.required,
+                },
+              });
+            }
           }
-        }
 
-        const notified = await channel.notifyQuestions({
-          jobTitle: input.job.title,
-          company: input.job.company,
-          questions: recorded.map((item) => item.summary),
-        });
-        for (const item of recorded) {
-          const messageId = notified.messageIds?.[item.summary.shortId];
-          if (!messageId) continue;
-          await database
-            .update(schema.pendingQuestions)
-            .set({ channelMessageId: messageId, updatedAt: new Date() })
-            .where(eq(schema.pendingQuestions.id, item.rowId));
+          const notified = await channel.notifyQuestions({
+            jobTitle: input.job.title,
+            company: input.job.company,
+            questions: recorded.map((item) => item.summary),
+          });
+          for (const item of recorded) {
+            const messageId = notified.messageIds?.[item.summary.shortId];
+            if (!messageId) continue;
+            await database
+              .update(schema.pendingQuestions)
+              .set({ channelMessageId: messageId, updatedAt: new Date() })
+              .where(eq(schema.pendingQuestions.id, item.rowId));
+          }
+
+          await addCommandEvent(
+            input.commandId,
+            "apply_needs_answers",
+            `Paused apply for ${asks.length} unanswered field(s). The tab stays open — answer them on the site if you want, then click Resume. Filling the page does not continue the apply.`,
+            { jobId: input.job.id, count: asks.length },
+          );
         }
 
         await upsertApplication({
@@ -1641,14 +1834,60 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
           stopReason: `Needs answers: ${asks.map((item) => item.field.labelText).join("; ")}`,
           applyUrl: activePage.url(),
         });
+
+        const wait = await waitForPendingAnswers({
+          isPaused: () => isApplyPaused(input.userId),
+          setPaused: (paused) => setApplyPaused(input.userId, paused),
+          shouldHalt: async () =>
+            (await applyShouldHalt(input.commandId)) ||
+            Boolean(input.deadlineAt && Date.now() >= input.deadlineAt),
+        });
+        if (wait === "aborted") {
+          if (input.deadlineAt && Date.now() >= input.deadlineAt) {
+            await persistHalt("application_time_limit");
+            await finishTrace(artifactCtx, true);
+            return { stopReason: "time_limit", applicationId: application.id, artifacts: artifactCtx.paths };
+          }
+          await persistHalt("canceled");
+          await finishTrace(artifactCtx, true);
+          return { stopReason: "canceled", applicationId: application.id, artifacts: artifactCtx.paths };
+        }
+
+        const refreshed = await loadAnswerBankWithContext({
+          userId: input.userId,
+          jobId: input.job.id,
+          company: input.job.company,
+          domain: (() => {
+            try {
+              return new URL(input.job.sourceUrl).hostname;
+            } catch {
+              return "";
+            }
+          })(),
+          jobLocation: input.job.location,
+          remoteType: input.job.remoteType,
+          salaryText: input.job.salaryText,
+          jobTitle: input.job.title,
+          employmentType: input.job.employmentType,
+          visaSignal: input.job.visaSignal,
+        });
+        answers.splice(0, answers.length, ...refreshed.answers);
+        await upsertApplication({
+          userId: input.userId,
+          jobId: input.job.id,
+          status: "filling",
+          stopReason: "human_resumed",
+          applyUrl: activePage.url(),
+        });
         await addCommandEvent(
           input.commandId,
-          "apply_needs_answers",
-          `Paused apply for ${asks.length} unanswered field(s).`,
-          { jobId: input.job.id, count: asks.length },
+          "apply_answers_resumed",
+          "Resume pressed; continuing this form.",
+          { jobId: input.job.id, wait },
         );
-        await finishTrace(artifactCtx, true);
-        return { stopReason: "needs_answers", applicationId: application.id, artifacts: artifactCtx.paths };
+        resumeAdvance = true;
+        step -= 1;
+        continue;
       }
 
       // On an employer's form the model looks first; on the boards it is never consulted,
@@ -1965,8 +2204,13 @@ export async function applyToJob(input: ApplyJobInput): Promise<{
       }
       previousFingerprint = fingerprint;
       clickedWithoutProgress = true;
+      const beforeAdvance = await stopFromChallenge(
+        await resolvePauseOrChallenge(activePage, `blocked-before-advance-${step}`),
+        "apply_paused",
+      );
+      if (beforeAdvance) return beforeAdvance;
       await advance.locator.click({ timeout: 5000 });
-      await sleep(humanDelayMs({ minDelayMs: 1000, maxDelayMs: 2500 }, random));
+      await sleep(humanDelayMs({ minDelayMs: 1800, maxDelayMs: 3200 }, random));
     }
 
     await upsertApplication({

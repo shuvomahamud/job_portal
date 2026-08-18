@@ -269,6 +269,46 @@ test("empty required fields on a refused step are asked before combobox fallback
   assert.equal(asks[0]!.field.labelText, "Are you able to work on-site?");
 });
 
+test("a computed question is never raised to a human, even from the refused-form fallback", () => {
+  // The live bug: "Today's Date" reached the dashboard as a pending question through this
+  // exact path — a blunt "is it empty and required" scan that has no idea some questions
+  // do not need anyone, human or model, to answer them.
+  const asks = pendingAsksWhenFormRefused([
+    field({
+      fieldCategory: "unknown",
+      inputType: "text",
+      tagName: "input",
+      labelText: "Today's Date *",
+      currentValue: "",
+      required: true,
+    }),
+  ]);
+  assert.equal(asks.length, 0);
+});
+
+test("a computed question does not hide a genuine one on the same refused page", () => {
+  const asks = pendingAsksWhenFormRefused([
+    field({
+      fieldCategory: "unknown",
+      inputType: "text",
+      tagName: "input",
+      labelText: "Today's Date *",
+      currentValue: "",
+      required: true,
+    }),
+    field({
+      fieldCategory: "custom_short_answer",
+      inputType: "text",
+      tagName: "input",
+      labelText: "Are you able to work on-site?",
+      currentValue: "",
+      required: true,
+    }),
+  ]);
+  assert.equal(asks.length, 1);
+  assert.equal(asks[0]!.field.labelText, "Are you able to work on-site?");
+});
+
 test("an already-selected Indeed phone country is left alone", async () => {
   const { frame, calls } = fakeFrame(["Afghanistan+93", "United States+1"]);
   const country = field({

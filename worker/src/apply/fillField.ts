@@ -5,6 +5,7 @@ import {
   withoutPhoneDialCode,
 } from "../formfill/optionMatching";
 import type { DetectedField } from "../formfill/types";
+import { computedAnswerFor } from "../formfill/computedAnswers";
 
 export type HumanTyping = {
   typingDelayMs: () => number;
@@ -33,6 +34,10 @@ export async function fillDetectedField(
   }
 
   if (fieldAlreadyHasValue(field, value)) return { ok: true };
+
+  if (field.inputType === "radio" || field.inputType === "checkbox") {
+    return fillChoiceControl(frame, field, value);
+  }
 
   const locator = frame.locator(field.selector);
   const count = await locator.count();
@@ -63,22 +68,6 @@ export async function fillDetectedField(
     return fillAriaCombobox(frame, locator.first(), field, value, human, extras);
   }
 
-  if (field.inputType === "radio" || field.inputType === "checkbox") {
-    const index = bestOptionIndex(field.options, value);
-    if (index < 0) {
-      throw new Error(`No unambiguous ${field.inputType} option matched "${value}".`);
-    }
-    if (index >= count) {
-      throw new Error(
-        `${field.inputType} option index ${index} is out of range for ${count} matched controls.`,
-      );
-    }
-    const option = locator.nth(index);
-    await option.scrollIntoViewIfNeeded();
-    await option.check();
-    return { ok: true };
-  }
-
   const target = locator.first();
   await target.scrollIntoViewIfNeeded();
   await target.click();
@@ -90,6 +79,51 @@ export async function fillDetectedField(
   // which is worse than not applying at all.
   await target.fill("").catch(() => undefined);
   await target.pressSequentially(value, { delay: human.typingDelayMs() });
+  return { ok: true };
+}
+
+function cssAttr(value: string): string {
+  return typeof CSS !== "undefined" && typeof CSS.escape === "function"
+    ? CSS.escape(value)
+    : value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+
+/**
+ * Radio/checkbox `selector` is often `#first-option-id` even when `options` lists the
+ * whole group. Locate by `name` so choosing option 2 is not "index 2 of 1 controls".
+ * A mismatch asks instead of crashing the apply.
+ */
+async function fillChoiceControl(
+  frame: FrameLike,
+  field: DetectedField,
+  value: string,
+): Promise<FillFieldResult> {
+  const kind = field.inputType;
+  const groupSelector = field.name
+    ? `input[type="${kind}"][name="${cssAttr(field.name)}"]`
+    : field.selector;
+  let locator = frame.locator(groupSelector);
+  let count = await locator.count();
+  if (!count && groupSelector !== field.selector) {
+    locator = frame.locator(field.selector);
+    count = await locator.count();
+  }
+  if (!count) {
+    return { ok: false, reason: `Field selector matched nothing: ${field.selector}` };
+  }
+  const index = bestOptionIndex(field.options, value);
+  if (index < 0) {
+    return { ok: false, reason: `No unambiguous ${kind} option matched "${value}".` };
+  }
+  if (index >= count) {
+    return {
+      ok: false,
+      reason: `${kind} option index ${index} is out of range for ${count} matched controls.`,
+    };
+  }
+  const option = locator.nth(index);
+  await option.scrollIntoViewIfNeeded();
+  await option.check();
   return { ok: true };
 }
 
@@ -116,6 +150,13 @@ export function fieldAlreadyHasValue(field: DetectedField, desired: string): boo
     }
   }
   return false;
+}
+
+/** True when the page already has an answer, so Resume should not re-ask. */
+export function fieldLooksAnswered(field: DetectedField): boolean {
+  const current = String(field.currentValue ?? "").trim();
+  if (!current) return false;
+  return !looksLikeCountryOptionList(current);
 }
 
 /** Dice city-of-residence is a plain <input> with Google Places, not role=combobox. */
@@ -160,11 +201,18 @@ export function autocompleteQueryCandidates(
 export function pendingAsksWhenFormRefused(
   fields: DetectedField[],
 ): Array<{ field: DetectedField; reason: string }> {
+  // This is the fallback path taken when the form has already refused to advance, and it
+  // used to flag anything empty without asking whether it even needed a person: "Today's
+  // Date" was raised as a pending question here even after the normal fill pass had its
+  // own fix for exactly that question, because this scan never consulted it — it only
+  // looked at whether the field was currently empty, not whether it was answerable.
+  // A field this module can compute is never a real unknown, however it got here empty.
   const emptyRequired = fields.filter(
     (field) =>
       field.required &&
       field.fieldCategory !== "resume_upload" &&
-      !String(field.currentValue ?? "").trim(),
+      !String(field.currentValue ?? "").trim() &&
+      !computedAnswerFor(field),
   );
   if (emptyRequired.length) {
     return emptyRequired.map((field) => ({

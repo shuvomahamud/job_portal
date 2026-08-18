@@ -93,6 +93,7 @@ export type MatchType =
   | "exact"
   | "normalized"
   | "alias"
+  | "retrieved"
   | "rule"
   | "ollama"
   | "manual";
