@@ -38,11 +38,23 @@ export const ollamaClassifyResponseSchema = z.object({
   reason: z.string(),
 });
 
-export const ollamaMatchResponseSchema = z.object({
-  matchedAnswerId: z.string().nullable(),
-  confidence: z.number().min(0).max(1),
-  reason: z.string(),
-  requiresReview: z.boolean(),
+/**
+ * One page's worth of unanswered questions, resolved in a single call rather than one
+ * request per field. A busy screening step can carry a dozen questions the deterministic
+ * matcher missed; asking about each individually both wastes calls the per-application
+ * budget cannot afford and gives the model no chance to notice that two differently-worded
+ * questions on the same page are asking for the same thing.
+ */
+export const ollamaBatchMatchResponseSchema = z.object({
+  matches: z.array(
+    z.object({
+      fieldId: z.string(),
+      matchedAnswerId: z.string().nullable(),
+      confidence: z.number().min(0).max(1),
+      reason: z.string(),
+      requiresReview: z.boolean(),
+    }),
+  ),
 });
 
 export const ollamaDropdownResponseSchema = z.object({

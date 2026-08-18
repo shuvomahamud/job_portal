@@ -1,4 +1,6 @@
 import { matchSavedAnswer } from "./answerMatcher";
+import { matchDerivedBankAnswer } from "./bankRetrieval";
+import { questionSimilarity } from "./questionNormalizer";
 import type {
   DetectedField,
   FieldSuggestion,
@@ -6,6 +8,7 @@ import type {
   SavedAnswer,
 } from "./types";
 import {
+  ollamaBatchMatchResponseSchema,
   ollamaClassifyResponseSchema,
   ollamaDropdownResponseSchema,
 } from "./schemas";
@@ -65,7 +68,11 @@ export function buildSuggestion(
   field: DetectedField,
   answers: SavedAnswer[],
   settings?: MatchSettings,
+  context?: { company?: string },
 ): FieldSuggestion {
+  const derived = matchDerivedBankAnswer(field, answers, context?.company ?? "");
+  if (derived) return derived;
+
   const eligibleAnswers = isHistoricalResumeLocationField(field)
     ? historicalLocationAnswers(answers)
     : answers.filter((answer) => !isHistoricalResumeLocationAnswer(answer));
@@ -191,4 +198,111 @@ export async function mapDropdownWithOllama(
   } catch {
     return null;
   }
+}
+
+/** Per-field candidates ranked by similarity, same threshold and shape as the batch build. */
+function rankCandidatesForField(field: DetectedField, answers: SavedAnswer[]): SavedAnswer[] {
+  return [...answers]
+    .map((answer) => ({
+      answer,
+      score: Math.max(
+        questionSimilarity(field.normalizedQuestion, answer.normalizedQuestion),
+        questionSimilarity(field.labelText, answer.originalQuestion),
+      ),
+    }))
+    .filter((row) => row.score >= 0.2)
+    .sort((left, right) => right.score - left.score)
+    .map((row) => row.answer);
+}
+
+/**
+ * Picks an existing bank answer for every question on a page the deterministic matcher
+ * missed, in one call rather than one request per field.
+ *
+ * A single busy screening step can carry a dozen such questions. Asking about each on its
+ * own both burns through the per-application call budget faster than the page has fields,
+ * and gives the model nothing to notice that two differently-worded questions on the same
+ * page — "Do you require sponsorship?" and "Will you now or in the future require visa
+ * sponsorship?" — are the same question. One call, one shared list of candidate answers,
+ * one verdict per question. The model may only return an id from the supplied list for
+ * each — it must not invent text, and a question left unmatched simply is not in the
+ * returned map.
+ */
+export async function retrieveAnswersWithOllamaBatch(
+  fields: DetectedField[],
+  answers: SavedAnswer[],
+  settings: MatchSettings,
+  minConfidence = 0.75,
+): Promise<Map<string, FieldSuggestion>> {
+  const results = new Map<string, FieldSuggestion>();
+  if (!settings.useOllamaForAmbiguous || !fields.length || !answers.length) return results;
+
+  const picked: SavedAnswer[] = [];
+  const seen = new Set<string>();
+  const take = (answer: SavedAnswer) => {
+    if (seen.has(answer.id)) return;
+    seen.add(answer.id);
+    picked.push(answer);
+  };
+  // A handful of top candidates per field, union'd across the whole page, keeps the
+  // prompt bounded regardless of how many questions the page turns out to have.
+  for (const field of fields) {
+    for (const answer of rankCandidatesForField(field, answers).slice(0, 8)) take(answer);
+    if (picked.length >= 40) break;
+  }
+  for (const answer of answers) {
+    if (answer.id.startsWith("common:") || answer.id.startsWith("fact:")) take(answer);
+    if (picked.length >= 48) break;
+  }
+  if (!picked.length) return results;
+
+  try {
+    const parsed = ollamaBatchMatchResponseSchema.parse(
+      await askOllama(
+        settings,
+        "For each question, choose the saved answer that already answers it. Return only JSON with matches: one entry per question, same order, each with fieldId, matchedAnswerId, confidence, reason, and requiresReview. matchedAnswerId must be one of the supplied answer ids, or null. Never invent an answer.",
+        JSON.stringify({
+          questions: fields.map((field) => ({
+            fieldId: field.id,
+            question: field.labelText,
+            required: field.required,
+            options: field.options,
+          })),
+          answers: picked.map((answer) => ({
+            id: answer.id,
+            question: answer.originalQuestion,
+            value: answer.answerValue.slice(0, 300),
+          })),
+        }),
+      ),
+    );
+
+    const byId = new Map(picked.map((answer) => [answer.id, answer]));
+    const byFieldId = new Map(fields.map((field) => [field.id, field]));
+    for (const row of parsed.matches) {
+      if (row.requiresReview || row.confidence < minConfidence || !row.matchedAnswerId) continue;
+      const field = byFieldId.get(row.fieldId);
+      const savedAnswer = byId.get(row.matchedAnswerId);
+      if (!field || !savedAnswer) continue;
+      results.set(field.id, {
+        field,
+        match: {
+          fieldId: field.id,
+          savedAnswerId: savedAnswer.id,
+          matchType: "retrieved",
+          confidence: Math.max(row.confidence, 0.9),
+          reason: row.reason,
+          requiresReview: false,
+        },
+        savedAnswer,
+        suggestedValue: savedAnswer.answerValue,
+        source: "retrieved",
+        requiresReview: false,
+      });
+    }
+  } catch {
+    // Empty map: the caller's existing "ask" decision stands, exactly as a per-field
+    // failure used to leave it.
+  }
+  return results;
 }

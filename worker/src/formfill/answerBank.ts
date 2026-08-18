@@ -9,6 +9,7 @@ import {
   type JobLocationInput,
 } from "../../../src/lib/addressPolicy";
 import { normalizeQuestion } from "./questionNormalizer";
+import { isComputedQuestion } from "./computedAnswers";
 import { getRiskLevel } from "./riskPolicy";
 import {
   authorizationToSavedAnswers,
@@ -494,6 +495,13 @@ export async function learnAnswer(
   },
   database?: AnswerDb,
 ): Promise<void> {
+  // Never cache a computed question — "Today's Date" answered correctly right now is
+  // wrong on every later run that reuses it verbatim. The apply runner already resolves
+  // these before anything reaches this function; this is the backstop for any other path
+  // that writes an answer, present or future, so the rule lives in one place rather than
+  // needing to be remembered at every caller.
+  if (isComputedQuestion(input.field.labelText)) return;
+
   const db = dbOrDefault(database);
   const now = new Date();
   const normalizedQuestion = input.field.normalizedQuestion || normalizeQuestion(input.field.labelText);
