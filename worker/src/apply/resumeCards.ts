@@ -29,6 +29,16 @@ export function looksLikeResumeDetailsReview(text: string): boolean {
 
 export function isHistoricalResumeLocationField(field: DetectedField): boolean {
   const context = `${field.labelText} ${field.nearbyText} ${field.normalizedQuestion}`;
+  // Indeed's "University, City & State, Degree" is one combined field, not the
+  // pencil-edit location on a resume card. Treating it as historical made the
+  // filler ignore the education answers already in the bank.
+  if (
+    /\b(trade school|graduate school|high school|university|college)\b/i.test(field.labelText) &&
+    /\b(city|state|degree)\b/i.test(field.labelText) &&
+    !/^location for /i.test(field.labelText)
+  ) {
+    return false;
+  }
   const locationLike =
     LOCATION_CATEGORIES.has(field.fieldCategory) || /\blocation\b/i.test(context);
   if (!locationLike) return false;

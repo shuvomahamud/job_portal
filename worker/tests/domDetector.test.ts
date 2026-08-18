@@ -64,6 +64,7 @@ test("detectFields classifies the donor sample application form", async () => {
 
     const workAuth = fields.find((field) => field.fieldCategory === "work_authorization");
     assert.ok(workAuth, "work_authorization radio group");
+    assert.match(workAuth.selector, /^input\[type="radio"\]\[name=/);
     assert.match(workAuth.labelText, /authorized to work/i);
     assert.deepEqual(workAuth.options, ["Yes", "No"]);
 

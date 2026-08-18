@@ -170,6 +170,16 @@ export function detectFieldBasesInPage(): FieldBase[] {
   }
 
   function uniqueSelector(element: HTMLElement): string {
+    // Named radio/checkbox groups must share one selector. Preferring `#id` left
+    // fill looking at a single control while `options` listed the whole group, so
+    // choosing option index 2 threw and crashed the apply.
+    if (
+      element instanceof HTMLInputElement &&
+      ["radio", "checkbox"].includes(element.type) &&
+      element.name
+    ) {
+      return `input[type="${element.type}"][name="${cssEscape(element.name)}"]`;
+    }
     if (element.id) return `#${cssEscape(element.id)}`;
     if (element instanceof HTMLInputElement && element.type === "file") {
       if (element.name) {
@@ -178,13 +188,6 @@ export function detectFieldBasesInPage(): FieldBase[] {
       }
       const files = queryRoot(element).querySelectorAll('input[type="file"]');
       if (files.length === 1) return 'input[type="file"]';
-    }
-    if (
-      element instanceof HTMLInputElement &&
-      ["radio", "checkbox"].includes(element.type) &&
-      element.name
-    ) {
-      return `input[type="${element.type}"][name="${cssEscape(element.name)}"]`;
     }
     const name = element.getAttribute("name");
     if (name) {

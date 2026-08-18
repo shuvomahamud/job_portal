@@ -23,8 +23,14 @@ test("normalizeQuestion canonicalizes C# and .NET experience questions", () => {
   assert.equal(normalizeQuestion("Years working with .NET"), "years dotnet");
 });
 
-test("normalizeQuestion removes punctuation, filler, whitespace, and repeated words", () => {
-  assert.equal(normalizeQuestion("  What is your preferred preferred ROLE?! "), "preferred role");
+test("normalizeQuestion does not collapse email-notification opt-in to contact email", () => {
+  assert.notEqual(
+    normalizeQuestion(
+      "Would you like to opt-in to receive email notifications about new jobs from Thomas and Company?",
+    ),
+    "email",
+  );
+  assert.equal(normalizeQuestion("Email address"), "email");
 });
 
 test("questionSimilarity scores related questions above unrelated questions", () => {

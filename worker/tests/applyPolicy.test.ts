@@ -299,21 +299,18 @@ test("decideFieldAction asks before filling an incompatible option", () => {
 
 test("seeded human delays stay in documented ranges", () => {
   const rng = () => 0;
-  assert.equal(typingDelayMs(rng), 15);
-  assert.equal(interFieldDelayMs(rng), 200);
-  assert.equal(preSubmitDelayMs(rng), 800);
-  assert.equal(readingDelayMs(180, rng) <= 2_500, true);
+  assert.equal(typingDelayMs(rng), 40);
+  assert.equal(interFieldDelayMs(rng), 450);
+  assert.equal(preSubmitDelayMs(rng), 1200);
+  assert.equal(readingDelayMs(180, rng) <= 4_000, true);
   assert.equal(betweenApplicationsMs(15, 45, rng), 15_000);
 });
 
 test("in-form pacing still leaves a page time to react", () => {
-  // These are not for looking human — they are what stops a debounced validator or an
-  // async dropdown from missing a value and submitting a silently empty field. Cutting
-  // them to zero would be faster and would quietly break real applications.
   const fastest = () => 0;
-  assert.ok(interFieldDelayMs(fastest) >= 150, "a field always gets a moment to settle");
-  assert.ok(readingDelayMs(1, fastest) >= 250, "a page always gets a moment to settle");
-  assert.ok(preSubmitDelayMs(fastest) >= 500, "late validation can surface before submit");
+  assert.ok(interFieldDelayMs(fastest) >= 400, "a field always gets a moment to settle");
+  assert.ok(readingDelayMs(1, fastest) >= 400, "a page always gets a moment to settle");
+  assert.ok(preSubmitDelayMs(fastest) >= 1000, "late validation can surface before submit");
 });
 
 // The apply phase and its backoff are gone: nothing waits for scoring to finish, because
@@ -371,4 +368,114 @@ test("a new run starts with a fresh allowance", () => {
   ];
   assert.deepEqual(selectJobsWithinRunLimits(candidates, 5), ["job-1", "job-2"]);
   assert.deepEqual(selectJobsWithinRunLimits(candidates, 5), ["job-1", "job-2"]);
+});
+
+test("marketing email opt-in fills No even when the bank suggested an email address", () => {
+  const action = decideFieldAction({
+    field: field({
+      inputType: "radio",
+      labelText:
+        "Would you like to opt-in to receive email notifications about new jobs from Thomas and Company?",
+      normalizedQuestion: "opt in receive email notifications new jobs",
+      fieldCategory: "custom_short_answer",
+      riskLevel: "MEDIUM",
+      options: ["Yes", "No"],
+      confidence: 0.92,
+    }),
+    suggestedValue: "a@example.com",
+    trustLlmAnswers: false,
+  });
+  assert.equal(action.kind, "fill");
+  if (action.kind === "fill") assert.equal(action.value, "No");
+});
+
+test("instructional disclaimer text is skipped instead of asked", () => {
+  const action = decideFieldAction({
+    field: field({
+      inputType: "text",
+      labelText:
+        "We request the following information to help us make the best possible placement. You should complete all portions of this application that pertain to you. All information given will be held in strict confidence. Fields with Asterisks* are REQUIRED.",
+      normalizedQuestion: "request following information",
+      fieldCategory: "unknown",
+      riskLevel: "HIGH",
+      required: true,
+      options: [],
+    }),
+    trustLlmAnswers: false,
+  });
+  assert.equal(action.kind, "skip");
+});
+
+test("Either on a work-type question fills Full-time when that is an option", () => {
+  const action = decideFieldAction({
+    field: field({
+      inputType: "radio",
+      labelText: "What type of work are you looking for?",
+      normalizedQuestion: "type work looking",
+      fieldCategory: "custom_short_answer",
+      riskLevel: "MEDIUM",
+      options: ["Full-time", "Part-time", "Contract"],
+      required: true,
+    }),
+    suggestedValue: "Either",
+    match: {
+      fieldId: "f1",
+      savedAnswerId: "a1",
+      matchType: "exact",
+      confidence: 0.99,
+      reason: "x",
+      requiresReview: false,
+    },
+    trustLlmAnswers: false,
+  });
+  assert.equal(action.kind, "fill");
+  if (action.kind === "fill") assert.equal(action.value, "Full-time");
+});
+
+test("ApplicantPool acknowledgments, SMS opt-out, and today's date fill without asking", () => {
+  const ack = decideFieldAction({
+    field: field({
+      inputType: "radio",
+      labelText: "By applying to this position, I agree to ApplicantPool's Privacy Policy & Terms of Service *",
+      fieldCategory: "unknown",
+      riskLevel: "HIGH",
+      options: ["I understand"],
+      required: true,
+    }),
+    trustLlmAnswers: false,
+  });
+  assert.equal(ack.kind, "fill");
+  if (ack.kind === "fill") assert.equal(ack.value, "I understand");
+
+  const sms = decideFieldAction({
+    field: field({
+      inputType: "radio",
+      labelText:
+        "Please indicate if you agree to ApplicantPool's Applicant Communication Policy for receiving text messages. *",
+      fieldCategory: "unknown",
+      riskLevel: "HIGH",
+      options: [
+        "Yes, I agree to be contacted by text messages",
+        "No, I do not agree to receive text messages",
+      ],
+      required: true,
+    }),
+    trustLlmAnswers: false,
+  });
+  assert.equal(sms.kind, "fill");
+  if (sms.kind === "fill") assert.match(sms.value, /do not agree/i);
+
+  const date = decideFieldAction({
+    field: field({
+      inputType: "text",
+      labelText: "Today's Date *",
+      fieldCategory: "custom_short_answer",
+      riskLevel: "MEDIUM",
+      options: [],
+      required: true,
+    }),
+    trustLlmAnswers: false,
+  });
+  assert.equal(date.kind, "fill");
+  if (date.kind === "fill") assert.match(date.value, /^\d{2}\/\d{2}\/\d{4}$/);
 });

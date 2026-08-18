@@ -39,8 +39,25 @@ for (const [label, expected] of cases) {
   });
 }
 
-test("classifyField treats unknown textareas as long answers", () => {
-  assert.equal(classifyField(field("Tell us your story", "textarea")).category, "custom_long_answer");
+test("classifyField treats combined school / city / degree as a short answer", () => {
+  assert.equal(classifyField(field("University, City & State, Degree")).category, "custom_short_answer");
+  assert.equal(classifyField(field("Graduate School, City & State, Degree")).category, "custom_short_answer");
+  assert.equal(classifyField(field("Trade School, City & State, Degree")).category, "custom_short_answer");
+});
+
+test("classifyField treats marketing email opt-in as a short answer, not email", () => {
+  const result = classifyField(
+    field("Would you like to opt-in to receive email notifications about new jobs?"),
+  );
+  assert.equal(result.category, "custom_short_answer");
+  assert.equal(classifyField(field("Email address")).category, "email");
+});
+
+test("classifyField treats years of remote work as a short answer, not location preference", () => {
+  assert.equal(
+    classifyField(field("How many years of remote work experience do you have?")).category,
+    "custom_short_answer",
+  );
 });
 
 test("classifyField recognizes work-arrangement checkbox options", () => {

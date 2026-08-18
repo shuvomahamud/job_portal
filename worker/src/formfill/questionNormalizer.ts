@@ -44,7 +44,13 @@ function canonicalRule(text: string): string | undefined {
   if (/\b(authorized|authorization|eligible)\b.*\bwork\b|\bwork\b.*\b(authorized|authorization|eligible)\b/.test(text)) {
     return "work authorization";
   }
-  if (/\bemail\b/.test(text)) return "email";
+  // "email notifications" / marketing opt-in must not collapse to the contact-email key.
+  if (
+    /\bemail\b/.test(text) &&
+    !/\b(notification|opt.?in|marketing|subscribe)\b/.test(text)
+  ) {
+    return "email";
+  }
   if (/\b(phone|telephone|mobile)\b/.test(text)) return "phone";
   if (/\blinkedin\b/.test(text)) return "linkedin";
   if (/\bgithub\b/.test(text)) return "github";

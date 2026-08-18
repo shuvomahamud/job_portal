@@ -61,6 +61,13 @@ export function classifyField(field: ClassifiableField): Classification {
   if (/\bfull[\s_-]*name\b|\byour name\b|\bcandidate name\b/.test(text)) {
     return result("full_name", 0.95, "Full-name label.");
   }
+  if (
+    /\bopt[\s-]?in\b/.test(text) ||
+    (/\be[\s_-]*mail notifications?\b/.test(text) &&
+      /\b(receive|new jobs|marketing|subscribe)\b/.test(text))
+  ) {
+    return result("custom_short_answer", 0.92, "Marketing or job-alert opt-in, not an email address.");
+  }
   if (/\be[\s_-]*mail\b/.test(text)) return result("email", 0.98, "Email label.");
   if (/\b(phone|telephone|mobile|cell)\b/.test(text)) {
     return result("phone", 0.97, "Phone label.");
@@ -74,6 +81,12 @@ export function classifyField(field: ClassifiableField): Classification {
   }
   if (/\b(street|mailing|home)[\s_-]*address\b|\baddress line\b/.test(text)) {
     return result("address", 0.94, "Address label.");
+  }
+  if (
+    /\b(trade school|graduate school|high school|university|college)\b/.test(text) &&
+    /\bdegree\b/.test(text)
+  ) {
+    return result("custom_short_answer", 0.86, "Combined school / city / degree field.");
   }
   if (/\bcity\b/.test(text)) return result("city", 0.93, "City label.");
   if (/\b(state|province|region)\b/.test(text)) return result("state", 0.9, "State or region label.");
@@ -120,6 +133,9 @@ export function classifyField(field: ClassifiableField): Classification {
   }
   if (/\brelocat(e|ion)\b/.test(text)) {
     return result("willing_to_relocate", 0.94, "Relocation question.");
+  }
+  if (/\b(years?|yrs?).*\bremote\b|\bremote.*\b(years?|yrs?)\b/.test(text)) {
+    return result("custom_short_answer", 0.9, "Years of remote work, not a location preference.");
   }
   if (
     /\b(work arrangement|work location|location preference|remote preference)\b/.test(text) ||

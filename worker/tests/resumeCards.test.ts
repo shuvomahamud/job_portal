@@ -36,6 +36,19 @@ function field(over: Partial<DetectedField> = {}): DetectedField {
   };
 }
 
+test("a combined university city/degree field is not a historical resume location", () => {
+  assert.equal(
+    isHistoricalResumeLocationField(
+      field({
+        labelText: "University, City & State, Degree",
+        normalizedQuestion: "university city state degree",
+        fieldCategory: "city",
+      }),
+    ),
+    false,
+  );
+});
+
 test("a current-city field is not treated as a historical resume location", () => {
   assert.equal(
     isHistoricalResumeLocationField(
